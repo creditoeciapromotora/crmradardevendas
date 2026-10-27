@@ -1201,6 +1201,9 @@ function renderSimulador(){
         <div class="field"><label>Telefone</label><input id="s_tel" placeholder="(41) 99999-9999"></div>
         <div class="field"><label>Tipo de Benefício</label><select id="s_beneficio"><option>Aposentadoria</option><option>Pensão</option></select></div>
         <div class="field"><label>1ª parcela para</label><input id="s_1parc" placeholder="Ex: Julho/2026"></div>
+        ${simConv==='INSS'?`
+        <div class="field"><label>Benefício apto para desbloquear?</label><select id="s_desbloq" onchange="toggleDesbloq()"><option value="Sim">Sim</option><option value="Não">Não</option></select></div>
+        <div class="field" id="s_desbloqDataWrap" style="display:none;"><label>Data para desbloqueio</label><input type="date" id="s_desbloqData"></div>`:''}
       </div>
     </div>
     <div class="card">
@@ -1374,6 +1377,10 @@ function verSimulacaoMsg(id){
     </div>
   `);
 }
+function toggleDesbloq(){
+  const sel=document.getElementById('s_desbloq'); const w=document.getElementById('s_desbloqDataWrap');
+  if(sel&&w) w.style.display = sel.value==='Não' ? '' : 'none';
+}
 function setSimConv(c){ simConv=c; simPortabRows=[]; simRefinRows=[]; renderSimulador(); }
 function calcValorLiberado(){
   const parcela = Number(document.getElementById('s_parcela').value)||0;
@@ -1401,6 +1408,16 @@ function gerarSimulacao(){
   const tel=document.getElementById('s_tel').value||'-';
   const beneficio=document.getElementById('s_beneficio').value||'-';
   const parc1=document.getElementById('s_1parc').value||'-';
+  let desbloqTxt='';
+  const dsel=document.getElementById('s_desbloq');
+  if(simConv==='INSS' && dsel){
+    if(dsel.value==='Sim') desbloqTxt='\nBenefício apto para desbloquear: Sim';
+    else {
+      const dv=(document.getElementById('s_desbloqData')||{}).value;
+      const dfmt=dv?dv.split('-').reverse().join('/'):'a confirmar';
+      desbloqTxt='\nBenefício apto para desbloquear: Não — data para desbloqueio: '+dfmt;
+    }
+  }
   const banco=document.getElementById('s_banco').value||'-';
   const prazo=document.getElementById('s_prazo').value||'-';
   const parcela=Number(document.getElementById('s_parcela').value)||0;
@@ -1422,7 +1439,7 @@ function gerarSimulacao(){
 CPF: ${cpf}
 Telefone: ${tel}
 Tipo de Benefício: ${beneficio}
-Primeira parcela para: ${parc1}
+Primeira parcela para: ${parc1}${desbloqTxt}
 
 Banco: ${banco}
 ${blocos.join('\n\n')}
