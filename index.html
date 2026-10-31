@@ -497,6 +497,7 @@ function renderClientesTable(){
     <td>
       <button class="iconbtn" title="Editar" onclick="openClienteForm('${c.id}')">✏️</button>
       <button class="iconbtn" title="Nova Proposta" onclick="goTab('propostas');setTimeout(()=>openPropostaForm(null,'${c.cpf}'),0)">📄</button>
+      <button class="iconbtn" title="Documentos" onclick="openDocumentos('${c.cpf}')">📎</button>
       <button class="iconbtn" title="Excluir" onclick="deleteCliente('${c.id}')">🗑️</button>
     </td>
   </tr>`).join('')}
@@ -626,6 +627,7 @@ function renderPropostasTable(){
     <td>${brl(p.valor)}</td><td>${brl(p.parcela)}</td><td>${esc(p.prazo)}x</td>
     <td>${statusPill(p.status)}</td>${isGestora?`<td>${esc(vendedoraDe(p))}</td>`:''}
     <td>
+      <button class="iconbtn" title="Documentos do cliente" onclick="openDocumentos('${p.clienteCpf}')">📎</button>
       ${canEditProposta(p) ? `<button class="iconbtn" title="Editar" onclick="openPropostaForm('${p.id}')">✏️</button>` : ''}
       ${currentUser.role==='gestora' ? `<button class="iconbtn" title="Excluir" onclick="deleteProposta('${p.id}')">🗑️</button>` : ''}
     </td>
@@ -823,6 +825,162 @@ function deleteProposta(id){
     const ok = await removeRecord('propostas', id);
     renderPropostasTable();
     toast(ok ? 'Proposta excluída.' : 'Excluída aqui, mas não sincronizou — tente de novo.');
+  });
+}
+
+
+/* ============================= DOCUMENTOS ============================= */
+// Documentos ficam no Firestore (plano gratuito): coleção "documentos" (metadados)
+// e "documentos_partes" (conteúdo em base64, dividido em partes de até ~700 KB).
+// Não entram no loadAll para não pesar a abertura do sistema: são lidos sob demanda por CPF.
+const DOC_TIPOS = ['RG','CNH','CPF','Comprovante de residência','Contracheque / Holerite','Extrato INSS','Extrato bancário','Contrato','Selfie','Outro'];
+const DOC_PARTE_MAX = 700000;          // caracteres base64 por parte (< 1 MB por documento do Firestore)
+const DOC_MAX_BYTES = 8*1024*1024;     // limite por arquivo depois da compressão
+let _docsCpf = null;
+
+function nomePastaCliente(cpf){
+  const c = DB.clientes.find(x=>x.cpf===cpf);
+  const p = DB.propostas.find(x=>x.clienteCpf===cpf);
+  return ((c&&c.nome)||(p&&p.clienteNome)||cpf||'').toUpperCase();
+}
+function fmtBytes(n){ n=Number(n)||0; if(n<1024) return n+' B'; if(n<1048576) return (n/1024).toFixed(0)+' KB'; return (n/1048576).toFixed(1)+' MB'; }
+
+async function openDocumentos(cpf){
+  if(!cpf){ toast('Cliente sem CPF.'); return; }
+  _docsCpf = cpf;
+  showModal(`
+    <button class="closeX" onclick="closeModal()">✕</button>
+    <h3>📁 ${esc(nomePastaCliente(cpf))}</h3>
+    <div class="muted" style="margin:-10px 0 14px;font-size:12.5px;">CPF ${esc(cpf)} · documentos do cliente</div>
+    <div class="card" style="background:#f8fafc;">
+      <div class="grid c2">
+        <div class="field"><label>Tipo do documento</label><select id="doc_tipo">${DOC_TIPOS.map(t=>`<option>${t}</option>`).join('')}</select></div>
+        <div class="field"><label>Arquivos (fotos ou PDF — pode selecionar vários)</label><input type="file" id="doc_files" multiple accept="image/*,application/pdf"></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;"><button class="btn btn-orange" id="doc_btnEnviar" onclick="enviarDocumentos()">⬆️ Anexar</button></div>
+      <div id="doc_progresso" class="muted" style="font-size:12.5px;margin-top:6px;"></div>
+    </div>
+    <div id="doc_lista"><div class="empty">Carregando documentos...</div></div>
+    <div class="modalActions"><button class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>
+  `);
+  await carregarListaDocumentos();
+}
+
+async function carregarListaDocumentos(){
+  const wrap = document.getElementById('doc_lista'); if(!wrap) return;
+  if(!firebaseOk){ wrap.innerHTML = `<div class="empty">Sem conexão com o banco de dados.</div>`; return; }
+  try{
+    const snap = await db.collection('documentos').where('clienteCpf','==',_docsCpf).get();
+    const docs = snap.docs.map(d=>d.data()).sort((a,b)=>(b.criadoEm||'').localeCompare(a.criadoEm||''));
+    if(!docs.length){ wrap.innerHTML = `<div class="empty">Nenhum documento anexado ainda.</div>`; return; }
+    wrap.innerHTML = `<div class="tableWrap"><table><thead><tr><th>Tipo</th><th>Arquivo</th><th>Tamanho</th><th>Enviado por</th><th>Data</th><th>Ações</th></tr></thead><tbody>
+      ${docs.map(d=>`<tr>
+        <td><b>${esc(d.tipo)}</b></td><td>${esc(d.nomeArquivo)}</td><td>${fmtBytes(d.tamanho)}</td>
+        <td>${esc(d.criadoPor)}</td><td>${fmtDate((d.criadoEm||'').slice(0,10))}</td>
+        <td>
+          <button class="iconbtn" title="Ver" onclick="abrirDocumento('${d.id}',false)">👁️</button>
+          <button class="iconbtn" title="Baixar" onclick="abrirDocumento('${d.id}',true)">⬇️</button>
+          ${(currentUser.role==='gestora'||d.criadoPor===currentUser.nome) ? `<button class="iconbtn" title="Excluir" onclick="excluirDocumento('${d.id}')">🗑️</button>` : ''}
+        </td></tr>`).join('')}
+    </tbody></table></div>`;
+  }catch(e){
+    console.error('docs load error', e);
+    wrap.innerHTML = `<div class="empty">Não foi possível carregar os documentos (${esc(e.code||e.message)}).</div>`;
+  }
+}
+
+function lerArquivoDataURL(file){
+  return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
+}
+// fotos: redimensiona para no máx. 1800px e salva em JPEG ~75% (fica legível e leve)
+async function comprimirImagem(file){
+  const url = await lerArquivoDataURL(file);
+  const img = await new Promise((res,rej)=>{ const i=new Image(); i.onload=()=>res(i); i.onerror=rej; i.src=url; });
+  const max = 1800; let w=img.width, h=img.height;
+  if(Math.max(w,h)>max){ const k=max/Math.max(w,h); w=Math.round(w*k); h=Math.round(h*k); }
+  const cv=document.createElement('canvas'); cv.width=w; cv.height=h;
+  const ctx=cv.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); ctx.drawImage(img,0,0,w,h);
+  const out = cv.toDataURL('image/jpeg',0.75);
+  return out.length < url.length ? {dataUrl:out, mime:'image/jpeg', ext:'jpg'} : {dataUrl:url, mime:file.type, ext:(file.name.split('.').pop()||'img')};
+}
+
+async function enviarDocumentos(){
+  const input = document.getElementById('doc_files');
+  const files = [...(input.files||[])];
+  if(!files.length){ toast('Escolha pelo menos um arquivo.'); return; }
+  if(!firebaseOk){ toast('⚠️ Sem conexão com o banco de dados.'); return; }
+  const tipo = document.getElementById('doc_tipo').value;
+  const btn = document.getElementById('doc_btnEnviar'); btn.disabled = true;
+  const prog = document.getElementById('doc_progresso');
+  let ok=0, falhas=[];
+  for(let i=0;i<files.length;i++){
+    const f = files[i];
+    prog.textContent = `Enviando ${i+1} de ${files.length}: ${f.name}...`;
+    try{
+      let conteudo;
+      if(f.type.startsWith('image/')) conteudo = await comprimirImagem(f);
+      else conteudo = {dataUrl: await lerArquivoDataURL(f), mime: f.type||'application/octet-stream', ext:(f.name.split('.').pop()||'')};
+      const b64 = conteudo.dataUrl.split(',')[1]||'';
+      const bytes = Math.round(b64.length*3/4);
+      if(bytes > DOC_MAX_BYTES){ falhas.push(`${f.name} (muito grande: ${fmtBytes(bytes)}, máx. ${fmtBytes(DOC_MAX_BYTES)})`); continue; }
+      const id = uid();
+      const partes = [];
+      for(let k=0;k<b64.length;k+=DOC_PARTE_MAX) partes.push(b64.slice(k,k+DOC_PARTE_MAX));
+      for(let k=0;k<partes.length;k++){
+        await db.collection('documentos_partes').doc(id+'_'+k).set({docId:id, ordem:k, dados:partes[k]});
+      }
+      const base = f.name.replace(/\.[^.]+$/,'');
+      await db.collection('documentos').doc(id).set({
+        id, clienteCpf:_docsCpf, pasta:nomePastaCliente(_docsCpf), tipo,
+        nomeArquivo: conteudo.mime==='image/jpeg' && !/\.jpe?g$/i.test(f.name) ? base+'.jpg' : f.name,
+        mime: conteudo.mime, tamanho: bytes, partes: partes.length,
+        criadoPor: currentUser.nome, criadoEm: new Date().toISOString()
+      });
+      ok++;
+    }catch(e){ console.error('upload doc error', e); falhas.push(`${f.name} (${e.code||e.message})`); }
+  }
+  btn.disabled = false; input.value='';
+  prog.innerHTML = (ok?`✅ ${ok} documento(s) anexado(s).`:'') + (falhas.length?`<br><span style="color:var(--red)">Não enviados: ${esc(falhas.join('; '))}</span>`:'');
+  await carregarListaDocumentos();
+}
+
+async function montarArquivo(id){
+  const meta = (await db.collection('documentos').doc(id).get()).data();
+  if(!meta) throw new Error('documento não encontrado');
+  let b64='';
+  for(let k=0;k<(meta.partes||0);k++){
+    const parte = (await db.collection('documentos_partes').doc(id+'_'+k).get()).data();
+    b64 += (parte&&parte.dados)||'';
+  }
+  const bin = atob(b64); const arr = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) arr[i]=bin.charCodeAt(i);
+  return {meta, blob:new Blob([arr],{type:meta.mime||'application/octet-stream'})};
+}
+async function abrirDocumento(id, baixar){
+  try{
+    toast('Abrindo documento...');
+    const {meta, blob} = await montarArquivo(id);
+    const url = URL.createObjectURL(blob);
+    if(baixar){
+      const a=document.createElement('a'); a.href=url;
+      a.download = `${meta.pasta||''} - ${meta.tipo||''} - ${meta.nomeArquivo||'documento'}`.replace(/[\\/:*?"<>|]/g,'');
+      document.body.appendChild(a); a.click(); a.remove();
+    } else {
+      window.open(url,'_blank');
+    }
+    setTimeout(()=>URL.revokeObjectURL(url), 60000);
+  }catch(e){ console.error('open doc error', e); toast('⚠️ Não foi possível abrir o documento.'); }
+}
+function excluirDocumento(id){
+  const cpf = _docsCpf;
+  confirmAction('Excluir este documento?', async ()=>{
+    try{
+      const meta = (await db.collection('documentos').doc(id).get()).data();
+      for(let k=0;k<((meta&&meta.partes)||0);k++) await db.collection('documentos_partes').doc(id+'_'+k).delete();
+      await db.collection('documentos').doc(id).delete();
+      toast('Documento excluído.');
+    }catch(e){ console.error('delete doc error', e); toast('⚠️ Não foi possível excluir agora.'); }
+    openDocumentos(cpf);
   });
 }
 
