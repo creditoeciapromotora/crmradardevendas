@@ -187,7 +187,29 @@ const USERS = {
   nicoly:   {nome:'Nicoly',    role:'consultora', senha:'nicoly123'},
   tatielle: {nome:'Tatielle',  role:'consultora', senha:'tatielle123'}
 };
-const CONVENIOS = ['INSS','GOV','SIAPE','PREFEITURA','CLT','FGTS'];
+const CONVENIOS = ['INSS','GOV','SIAPE','PREFEITURA','EXÉRCITO','CLT','FGTS'];
+// INSS: nº do benefício + espécie · Servidores (GOV, PREFEITURA, SIAPE, EXÉRCITO): matrícula + situação · CLT e FGTS: nada
+const CONV_SERVIDOR = ['GOV','PREFEITURA','SIAPE','EXÉRCITO'];
+function situacoesDe(conv){ return conv==='EXÉRCITO' ? ['Ativo','Inativo (reserva/reformado)','Pensionista'] : ['Ativo','Aposentado','Pensionista']; }
+function camposConvenioHtml(conv, c){
+  const val = k => c ? esc(c[k]||'') : '';
+  if(conv==='INSS') return `
+      <div class="field"><label>Nº do benefício</label><input id="f_benef" value="${val('beneficio')}" placeholder="Ex: 123.456.789-0"></div>
+      <div class="field"><label>Espécie</label><select id="f_especie"><option value="">Selecione...</option>${(c&&c.especie&&!ESPECIES.includes(c.especie)?[c.especie]:[]).concat(ESPECIES).map(e=>`<option ${c&&c.especie===e?'selected':''}>${esc(e)}</option>`).join('')}</select></div>`;
+  if(CONV_SERVIDOR.includes(conv)){
+    const sits = situacoesDe(conv);
+    return `
+      <div class="field"><label>Matrícula</label><input id="f_benef" value="${val('beneficio')}" placeholder="Nº da matrícula"></div>
+      <div class="field"><label>Situação</label><select id="f_situacao"><option value="">Selecione...</option>${(c&&c.situacao&&!sits.includes(c.situacao)?[c.situacao]:[]).concat(sits).map(x=>`<option ${c&&c.situacao===x?'selected':''}>${esc(x)}</option>`).join('')}</select></div>`;
+  }
+  return '';
+}
+function infoConvenioTxt(c){
+  if(!c) return '';
+  if(c.convenio==='INSS') return [c.beneficio?'Benefício '+c.beneficio:'', c.especie?'Espécie '+c.especie:''].filter(Boolean).join(' · ');
+  if(CONV_SERVIDOR.includes(c.convenio)) return [c.beneficio?'Matrícula '+c.beneficio:'', c.situacao||''].filter(Boolean).join(' · ');
+  return '';
+}
 const ORIGENS = ['URA','Loja','Já é cliente','Site','Facebook','Disparo','Indicação','Madepinus'];
 const MODALIDADES = ['Margem Nova','Portabilidade','Refinanciamento','Portabilidade + Refin','Cartão Benefício','Cartão Consignado','Crédito Consignado CLT','Complementar','Saque FGTS'];
 const UFS = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
@@ -634,10 +656,10 @@ function renderClientesTable(){
   const wrap = document.getElementById('clientesTableWrap');
   if(!list.length){ wrap.innerHTML = `<div class="empty">Nenhum cliente encontrado.</div>`; return; }
   wrap.innerHTML = `<div class="tableWrap"><table><thead><tr>
-    <th>Cliente</th><th>CPF</th><th>Nascimento</th><th>Telefone</th><th>Convênio</th><th>Benefício / Espécie</th><th>Origem</th><th>Cadastrado por</th><th>Data</th><th>Ações</th>
+    <th>Cliente</th><th>CPF</th><th>Nascimento</th><th>Telefone</th><th>Convênio</th><th>Benefício / Matrícula</th><th>Origem</th><th>Cadastrado por</th><th>Data</th><th>Ações</th>
   </tr></thead><tbody>
   ${list.map(c=>`<tr>
-    <td><b>${esc(c.nome)}</b></td><td>${esc(fmtCPF(c.cpf))}</td><td>${fmtDate(c.nascimento)}${idadeDe(c.nascimento)!=null?`<br><span class="muted" style="font-size:11.5px;">${idadeDe(c.nascimento)} anos</span>`:''}</td><td>${esc(c.telefone)}</td><td>${esc(c.convenio)}${c.uf?` (${esc(c.uf)})`:''}</td><td>${esc(c.beneficio||'-')}${c.especie?`<br><span class="muted" style="font-size:11.5px;">${esc(c.especie)}</span>`:''}</td><td>${esc(c.origem||'-')}</td>
+    <td><b>${esc(c.nome)}</b></td><td>${esc(fmtCPF(c.cpf))}</td><td>${fmtDate(c.nascimento)}${idadeDe(c.nascimento)!=null?`<br><span class="muted" style="font-size:11.5px;">${idadeDe(c.nascimento)} anos</span>`:''}</td><td>${esc(c.telefone)}</td><td>${esc(c.convenio)}${c.uf?` (${esc(c.uf)})`:''}</td><td>${esc(c.beneficio||'-')}${(c.especie||c.situacao)?`<br><span class="muted" style="font-size:11.5px;">${esc(c.especie||c.situacao)}</span>`:''}</td><td>${esc(c.origem||'-')}</td>
     <td>${esc(c.cadastradoPor)}</td><td>${fmtDate(c.dataCadastro)}</td>
     <td>
       <button class="iconbtn" title="Editar" onclick="openClienteForm('${c.id}')">✏️</button>
@@ -660,8 +682,8 @@ function downloadCSV(filename, headers, rows){
 function exportarClientesCSV(){
   const list = getClientesFiltrados();
   if(!list.length){ toast('Nenhum cliente para exportar.'); return; }
-  const headers = ['Nome','CPF','Nascimento','Idade','Telefone','Convênio','UF','Nº benefício / matrícula','Espécie','Origem','Cadastrado por','Data de cadastro'];
-  const rows = list.map(c=>[c.nome, fmtCPF(c.cpf), fmtDate(c.nascimento), idadeDe(c.nascimento)??'', c.telefone, c.convenio, c.uf||'', c.beneficio||'', c.especie||'', c.origem||'', c.cadastradoPor, fmtDate(c.dataCadastro)]);
+  const headers = ['Nome','CPF','Nascimento','Idade','Telefone','Convênio','UF','Nº benefício / matrícula','Espécie / Situação','Origem','Cadastrado por','Data de cadastro'];
+  const rows = list.map(c=>[c.nome, fmtCPF(c.cpf), fmtDate(c.nascimento), idadeDe(c.nascimento)??'', c.telefone, c.convenio, c.uf||'', c.beneficio||'', c.especie||c.situacao||'', c.origem||'', c.cadastradoPor, fmtDate(c.dataCadastro)]);
   downloadCSV('clientes_'+todayISO()+'.csv', headers, rows);
 }
 function canDelete(record){ return currentUser.role==='gestora' || record.cadastradoPor===currentUser.nome; }
@@ -684,8 +706,7 @@ function openClienteForm(id){
         <div id="f_ufWrap" style="width:90px;display:${mostrarUF?'block':'none'};"><label>UF</label><select id="f_uf">${UFS.map(u=>`<option ${c&&c.uf===u?'selected':''}>${u}</option>`).join('')}</select></div>
       </div>
       <div class="field"><label>Origem (de onde veio o cliente)</label><select id="f_origem"><option value="">Selecione...</option>${ORIGENS.map(v=>`<option ${c&&c.origem===v?'selected':''}>${v}</option>`).join('')}</select></div>
-      <div class="field"><label>Nº do benefício / matrícula</label><input id="f_benef" value="${c?esc(c.beneficio||''):''}" placeholder="Ex: 123.456.789-0"></div>
-      <div class="field"><label>Espécie</label><select id="f_especie"><option value="">Selecione...</option>${(c&&c.especie&&!ESPECIES.includes(c.especie)?[c.especie]:[]).concat(ESPECIES).map(e=>`<option ${c&&c.especie===e?'selected':''}>${esc(e)}</option>`).join('')}</select></div>
+      <div id="f_convCampos" style="display:contents;" data-cliente="${c?c.id:''}">${camposConvenioHtml(c?c.convenio:CONVENIOS[0], c)}</div>
     </div>
     <div class="modalActions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -695,6 +716,8 @@ function openClienteForm(id){
 }
 function toggleUFField(){
   const conv = document.getElementById('f_conv').value;
+  const box = document.getElementById('f_convCampos');
+  if(box){ const atual = box.dataset.cliente ? DB.clientes.find(x=>x.id===box.dataset.cliente) : null; box.innerHTML = camposConvenioHtml(conv, atual && atual.convenio===conv ? atual : null); }
   document.getElementById('f_ufWrap').style.display = (conv==='GOV'||conv==='PREFEITURA') ? 'block' : 'none';
 }
 async function saveCliente(id){
@@ -713,8 +736,9 @@ async function saveCliente(id){
     telefone: fmtTel(document.getElementById('f_tel').value),
     convenio, uf: mostraUF ? document.getElementById('f_uf').value : '',
     origem: document.getElementById('f_origem').value,
-    beneficio: document.getElementById('f_benef').value.trim(),
-    especie: document.getElementById('f_especie').value.trim()
+    beneficio: (document.getElementById('f_benef')?.value||'').trim(),
+    especie: convenio==='INSS' ? (document.getElementById('f_especie')?.value||'') : '',
+    situacao: CONV_SERVIDOR.includes(convenio) ? (document.getElementById('f_situacao')?.value||'') : ''
   };
   let record;
   if(id){
@@ -917,7 +941,7 @@ function autofillClienteProposta(){
     const idade = idadeDe(c.nascimento);
     info.innerHTML = `<b>${esc(c.nome)}</b> · ${esc(c.telefone)} · ${esc(c.convenio)}${c.uf?` (${esc(c.uf)})`:''}`
       + `<br>${idade!=null?`<b style="color:var(--navy)">${idade} anos</b>`:'<span style="color:var(--red)">Sem data de nascimento</span>'}`
-      + `${c.beneficio?` · Benefício ${esc(c.beneficio)}`:''}${c.especie?` · Espécie ${esc(c.especie)}`:''}`;
+      + `${infoConvenioTxt(c)?' · '+esc(infoConvenioTxt(c)):''}`;
     if(box){ box.style.display='block'; if(_pfDocsCpf!==c.cpf){ _pfDocsCpf=c.cpf; _docsCpf=c.cpf; carregarListaDocumentos(); } }
   } else {
     info.innerHTML = soDigitos(cpf).length===11 ? `<span style="color:var(--red)">Cliente não encontrado — cadastre-o primeiro em Clientes.</span>` : '';
