@@ -117,6 +117,23 @@ textarea{resize:vertical;min-height:70px;}
 .rankInfo b{color:var(--navy);}
 .rankStats{display:flex;gap:22px;font-size:12.5px;color:var(--muted);}
 .rankStats b{color:var(--text);font-size:14px;display:block;}
+.metaGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;}
+.metaBox{border:1px solid var(--border);border-radius:12px;padding:16px 18px;background:var(--card);}
+.metaBox.team{background:#f3f7fd;border-color:#c9d8ef;}
+.metaHead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px;}
+.metaHead b{color:var(--navy);font-size:15px;}
+.metaPct{font-size:26px;font-weight:800;color:var(--navy);}
+.metaPct.ok{color:#1d7a3a;}
+.metaBar{position:relative;height:14px;background:#e8ecf2;border-radius:8px;overflow:hidden;margin:6px 0 10px;}
+.metaBar .and{position:absolute;left:0;top:0;bottom:0;background:#ffd7a8;}
+.metaBar .int{position:absolute;left:0;top:0;bottom:0;background:var(--navy);}
+.metaBar .int.ok{background:#1d7a3a;}
+.metaLine{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0;}
+.metaLine span:first-child{color:var(--muted);}
+.metaLine b{color:var(--navy);}
+.metaSub{border-top:1px dashed var(--border);margin-top:8px;padding-top:8px;}
+.metaLegend{display:flex;gap:14px;font-size:11.5px;color:var(--muted);margin-top:4px;flex-wrap:wrap;}
+.metaLegend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px;}
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--navy-dark);color:#fff;padding:12px 20px;border-radius:10px;font-size:13.5px;z-index:100;box-shadow:0 8px 22px rgba(0,0,0,.3);display:none;}
 </style>
 </head>
@@ -364,8 +381,7 @@ function buildNav(){
     ['ranking','Ranking'],
     ['agenda','Agenda'],
     ['simulador','Simulador'],
-    ['financeiro','Financeiro'],
-    ['ponto','Ponto']
+    ['financeiro','Financeiro']
   ];
   if(currentUser.role==='gestora') tabs.push(['gestor','Gestor']);
   const nav = document.getElementById('tabsNav');
@@ -449,6 +465,7 @@ function renderDashboard(){
 
   document.getElementById('mainArea').innerHTML = `
     <div class="pageHead"><h2>Dashboard <span class="muted" style="font-weight:600;font-size:15px;">— ${dashMesFiltro ? fmtMes(dashMesFiltro) : 'Todos os meses'}</span></h2>${filtroSelect}</div>
+    ${metasCardHtml(dashMesFiltro || todayISO().slice(0,7), fmtMes)}
     ${kpis}
     <div class="card"><h3>Propostas por status${dashMesFiltro?' — '+fmtMes(dashMesFiltro):''}</h3>${statusCards}</div>
     <div class="card"><h3>Propostas fechadas por origem</h3>${origemCards}</div>
@@ -459,6 +476,89 @@ function renderDashboard(){
 function statusPill(s){
   const map = {'Em digitação':'digitacao','Ag. desbloqueio':'desbloqueio','Em análise':'analise','Integrada':'integrada','Recusada':'recusada','Cancelada':'cancelada','Ag. saldo devedor':'saldo'};
   return `<span class="pill ${map[s]||''}">${esc(s)}</span>`;
+}
+
+/* ============================= METAS ============================= */
+// Metas ficam em DB.config.metas = { 'AAAA-MM': { 'Nome': {total, port, novo} } }
+// Conta como atingido: propostas Integradas do mês (pela data da venda).
+// Em andamento (digitação, desbloqueio, análise, saldo devedor) aparece separado, em laranja claro.
+const STATUS_ANDAMENTO = ['Em digitação','Ag. desbloqueio','Em análise','Ag. saldo devedor'];
+const FERIADOS_FIXOS = ['01-01','04-21','05-01','09-07','10-12','11-02','11-15','11-20','12-25'];
+function isPort(p){ return /portabilidade/i.test(p.modalidade||''); }
+function ehDiaUtil(d){ const w=d.getDay(); if(w===0||w===6) return false; const md=String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); return !FERIADOS_FIXOS.includes(md); }
+function diasUteisRestantes(ym){
+  const [y,m] = ym.split('-').map(Number);
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const ini = new Date(y,m-1,1), fim = new Date(y,m,0);
+  let d = hoje>ini ? new Date(hoje) : ini; let n=0;
+  if(hoje>fim) return 0;
+  for(; d<=fim; d.setDate(d.getDate()+1)) if(ehDiaUtil(d)) n++;
+  return n;
+}
+function getMeta(ym, nome){
+  const m = (DB.config.metas && DB.config.metas[ym] && DB.config.metas[ym][nome]) || null;
+  if(!m) return null;
+  const port = Number(m.port||0), novo = Number(m.novo||0);
+  const total = (port||novo) ? port+novo : Number(m.total||0);
+  return total>0 ? {total, port, novo} : null;
+}
+function progressoDe(nome, ym){
+  const props = DB.propostas.filter(p=>vendedoraDe(p)===nome && p.dataVenda && p.dataVenda.slice(0,7)===ym);
+  const soma = (arr)=>arr.reduce((s,p)=>s+Number(p.valor||0),0);
+  const int = props.filter(p=>p.status==='Integrada');
+  const and = props.filter(p=>STATUS_ANDAMENTO.includes(p.status));
+  return {
+    int: soma(int), and: soma(and),
+    intPort: soma(int.filter(isPort)), intNovo: soma(int.filter(p=>!isPort(p))),
+    andPort: soma(and.filter(isPort)), andNovo: soma(and.filter(p=>!isPort(p)))
+  };
+}
+function metaBarHtml(feito, andamento, meta){
+  const pInt = Math.min(100, meta? feito/meta*100 : 0);
+  const pAnd = Math.min(100, meta? (feito+andamento)/meta*100 : 0);
+  return `<div class="metaBar"><div class="and" style="width:${pAnd}%"></div><div class="int ${pInt>=100?'ok':''}" style="width:${pInt}%"></div></div>`;
+}
+function metaBoxHtml(titulo, meta, prog, ym, team){
+  const pct = meta.total ? prog.int/meta.total*100 : 0;
+  const falta = Math.max(0, meta.total - prog.int);
+  const dias = diasUteisRestantes(ym);
+  const porDia = dias ? falta/dias : falta;
+  const sub = (lbl, feito, and, alvo)=>`
+    <div class="metaLine"><span>${lbl}</span><b>${brl(feito)} de ${brl(alvo)} · ${alvo?Math.round(feito/alvo*100):0}%</b></div>
+    ${metaBarHtml(feito, and, alvo)}`;
+  return `
+    <div class="metaBox ${team?'team':''}">
+      <div class="metaHead"><b>${esc(titulo)}</b><span class="metaPct ${pct>=100?'ok':''}">${Math.round(pct)}%</span></div>
+      ${metaBarHtml(prog.int, prog.and, meta.total)}
+      <div class="metaLine"><span>Integrado</span><b>${brl(prog.int)} de ${brl(meta.total)}</b></div>
+      <div class="metaLine"><span>Em andamento</span><b>${brl(prog.and)}</b></div>
+      <div class="metaLine"><span>Falta</span><b>${brl(falta)}</b></div>
+      <div class="metaLine"><span>Precisa por dia útil (${dias} restantes)</span><b>${falta? brl(porDia) : 'Meta batida!'}</b></div>
+      ${(meta.port && meta.novo) ? `<div class="metaSub">
+        ${sub('Portabilidade', prog.intPort, prog.andPort, meta.port)}
+        ${sub('Contrato novo', prog.intNovo, prog.andNovo, meta.novo)}
+      </div>` : ''}
+    </div>`;
+}
+function metasCardHtml(ym, fmtMes){
+  const isGestora = currentUser.role==='gestora';
+  const consultoras = Object.values(USERS).filter(u=>u.role==='consultora').map(u=>u.nome);
+  const nomes = isGestora ? consultoras : [currentUser.nome];
+  const linhas = nomes.map(n=>({nome:n, meta:getMeta(ym,n), prog:progressoDe(n,ym)})).filter(x=>x.meta);
+  if(!linhas.length){
+    return isGestora ? `<div class="card"><h3>Metas — ${fmtMes(ym)}</h3><div class="empty">Nenhuma meta cadastrada para este mês. Cadastre na aba Gestor.</div></div>` : '';
+  }
+  let boxes = '';
+  if(isGestora && linhas.length>1){
+    const tm = {total: linhas.reduce((s,x)=>s+x.meta.total,0), port:0, novo:0};
+    const tp = linhas.reduce((a,x)=>({int:a.int+x.prog.int, and:a.and+x.prog.and}),{int:0,and:0});
+    boxes += metaBoxHtml('Equipe', tm, tp, ym, true);
+  }
+  boxes += linhas.map(x=>metaBoxHtml(isGestora?x.nome:'Minha meta', x.meta, x.prog, ym, false)).join('');
+  return `<div class="card"><h3>Metas — ${fmtMes(ym)}</h3>
+    <div class="metaGrid">${boxes}</div>
+    <div class="metaLegend"><span><i style="background:var(--navy)"></i>Integrado (conta na meta)</span><span><i style="background:#ffd7a8"></i>Em andamento</span></div>
+  </div>`;
 }
 
 /* ============================= CLIENTES ============================= */
@@ -1790,6 +1890,7 @@ function renderGestor(){
       </div>
       <button class="btn btn-primary" onclick="saveConfig()">Salvar Configuração</button>
     </div>
+    ${metasGestorHtml()}
     <div class="card">
       <h3>Usuárias do sistema</h3>
       <div class="tableWrap"><table><thead><tr><th>Nome</th><th>Perfil</th></tr></thead><tbody>
@@ -1803,15 +1904,53 @@ async function saveConfig(){
   const vendedora = Number(document.getElementById('g_vendedora').value)||0;
   if(agiliza+vendedora!==100){
     confirmAction('A soma dos percentuais Empresa + Vendedora não é 100%. Deseja salvar mesmo assim?', async ()=>{
-      DB.config = {agilizaPct:agiliza, vendedoraPct:vendedora};
+      DB.config = {...DB.config, agilizaPct:agiliza, vendedoraPct:vendedora};
       await saveConfigDoc(DB.config);
       toast('Configuração salva.'); renderGestor();
     });
     return;
   }
-  DB.config = {agilizaPct:agiliza, vendedoraPct:vendedora};
+  DB.config = {...DB.config, agilizaPct:agiliza, vendedoraPct:vendedora};
   await saveConfigDoc(DB.config);
   toast('Configuração salva.'); renderGestor();
+}
+
+let metaMesEdit = todayISO().slice(0,7);
+function metasGestorHtml(){
+  const consultoras = Object.values(USERS).filter(u=>u.role==='consultora').map(u=>u.nome);
+  const ms = (DB.config.metas && DB.config.metas[metaMesEdit]) || {};
+  const v = (n,k)=> (ms[n] && ms[n][k]) ? ms[n][k] : '';
+  return `
+    <div class="card">
+      <h3>Metas do mês</h3>
+      <p class="muted" style="font-size:12.5px;margin-top:-8px;">Cada consultora vê só a própria meta no Dashboard; você vê as duas e o total da equipe. Preencha a meta total, ou divida em portabilidade + contrato novo (aí o total é a soma das duas).</p>
+      <div class="field" style="max-width:220px;"><label>Mês</label><input type="month" id="g_metaMes" value="${metaMesEdit}" onchange="metaMesEdit=this.value;renderGestor()"></div>
+      <div class="tableWrap"><table><thead><tr><th>Consultora</th><th>Meta total (R$)</th><th>Portabilidade (R$)</th><th>Contrato novo (R$)</th></tr></thead><tbody>
+        ${consultoras.map((n,i)=>`<tr>
+          <td><b>${esc(n)}</b></td>
+          <td><input type="number" min="0" step="1000" id="gm_total_${i}" value="${v(n,'total')}" placeholder="ex: 250000"></td>
+          <td><input type="number" min="0" step="1000" id="gm_port_${i}" value="${v(n,'port')}" placeholder="opcional"></td>
+          <td><input type="number" min="0" step="1000" id="gm_novo_${i}" value="${v(n,'novo')}" placeholder="opcional"></td>
+        </tr>`).join('')}
+      </tbody></table></div>
+      <button class="btn btn-orange" style="margin-top:12px;" onclick="saveMetas()">Salvar Metas</button>
+    </div>`;
+}
+async function saveMetas(){
+  const consultoras = Object.values(USERS).filter(u=>u.role==='consultora').map(u=>u.nome);
+  const mes = document.getElementById('g_metaMes').value || metaMesEdit;
+  const metas = {...(DB.config.metas||{})};
+  const doMes = {};
+  consultoras.forEach((n,i)=>{
+    const total = Number(document.getElementById('gm_total_'+i).value)||0;
+    const port = Number(document.getElementById('gm_port_'+i).value)||0;
+    const novo = Number(document.getElementById('gm_novo_'+i).value)||0;
+    if(total||port||novo) doMes[n] = {total: (port||novo) ? port+novo : total, port, novo};
+  });
+  metas[mes] = doMes;
+  DB.config = {...DB.config, metas};
+  const ok = await saveConfigDoc(DB.config);
+  if(ok){ toast('Metas salvas.'); renderGestor(); }
 }
 
 /* ============================= PONTO ============================= */
