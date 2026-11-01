@@ -207,6 +207,50 @@ function todayISO(){ return new Date().toISOString().slice(0,10); }
 function fmtDate(iso){ if(!iso) return '-'; const [y,m,d]=iso.split('-'); return d+'/'+m+'/'+y; }
 function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.style.display='block'; clearTimeout(window._toastT); window._toastT=setTimeout(()=>t.style.display='none',2600); }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+/* --- formatos: CPF 000.000.000-00, telefone, valores em R$ --- */
+function soDigitos(s){ return String(s==null?'':s).replace(/\D/g,''); }
+function fmtCPF(s){
+  const d = soDigitos(s).slice(0,11);
+  if(d.length<=3) return d;
+  if(d.length<=6) return d.slice(0,3)+'.'+d.slice(3);
+  if(d.length<=9) return d.slice(0,3)+'.'+d.slice(3,6)+'.'+d.slice(6);
+  return d.slice(0,3)+'.'+d.slice(3,6)+'.'+d.slice(6,9)+'-'+d.slice(9);
+}
+function cpfValido(s){
+  const d = soDigitos(s);
+  if(d.length!==11 || /^(\d)\1{10}$/.test(d)) return false;
+  for(let t=9;t<11;t++){
+    let soma=0; for(let i=0;i<t;i++) soma += Number(d[i])*(t+1-i);
+    const dv = ((soma*10)%11)%10; if(dv!==Number(d[t])) return false;
+  }
+  return true;
+}
+function mesmoCPF(a,b){ const x=soDigitos(a); return x.length>0 && x===soDigitos(b); }
+function cpfVariantes(cpf){ return [...new Set([cpf, fmtCPF(cpf), soDigitos(cpf)].filter(Boolean))]; }
+function fmtTel(s){
+  const d = soDigitos(s).slice(0,11);
+  if(d.length<=2) return d.length?'('+d:d;
+  if(d.length<=6) return '('+d.slice(0,2)+') '+d.slice(2);
+  if(d.length<=10) return '('+d.slice(0,2)+') '+d.slice(2,6)+'-'+d.slice(6);
+  return '('+d.slice(0,2)+') '+d.slice(2,7)+'-'+d.slice(7);
+}
+function maskCPF(el){ el.value = fmtCPF(el.value); }
+function maskTel(el){ el.value = fmtTel(el.value); }
+// valor em R$: digita só números, o campo mostra "R$ 15.000,00"
+function parseBRL(v){
+  if(typeof v==='number') return v;
+  const t = String(v==null?'':v).replace(/[^\d,.-]/g,'');
+  if(!t) return 0;
+  return Number(t.replace(/\./g,'').replace(',','.'))||0;
+}
+function brlInput(n){ n=Number(n)||0; return n ? brl(n) : ''; }
+function maskBRL(el){ const d = soDigitos(el.value); el.value = d ? brl(Number(d)/100) : ''; }
+function valBRL(id){ const el=document.getElementById(id); return el ? parseBRL(el.value) : 0; }
+function idadeDe(iso){
+  if(!iso) return null; const [y,m,d]=iso.split('-').map(Number); if(!y) return null;
+  const h=new Date(); let a=h.getFullYear()-y; if(h.getMonth()+1<m || (h.getMonth()+1===m && h.getDate()<d)) a--; return a;
+}
+const ESPECIES = ["01 - Pensão por morte – trabalhador rural", "02 - Pensão por morte acidentária", "03 - Pensão por morte – empregador rural", "04 - Aposentadoria por invalidez – trabalhador rural", "05 - Aposentadoria por invalidez acidentária – trabalhador rural", "06 - Aposentadoria por invalidez – empregador rural", "07 - Aposentadoria por velhice – trabalhador rural", "08 - Aposentadoria por idade – empregador rural", "11 - Amparo previdenciário por invalidez – trabalhador rural", "12 - Amparo previdenciário por idade – trabalhador rural", "18 - Auxílio-inclusão", "19 - Pensão de estudante", "20 - Pensão por morte de ex-diplomata", "21 - Pensão por morte previdenciária", "22 - Pensão por morte estatutária", "23 - Pensão por morte de ex-combatente", "24 - Pensão especial – ato institucional", "26 - Pensão por morte especial", "27 - Pensão por morte de servidor público federal", "28 - Pensão por morte – Regime Geral", "29 - Pensão por morte de ex-combatente marítimo", "30 - Renda mensal vitalícia por incapacidade", "32 - Aposentadoria por invalidez previdenciária", "33 - Aposentadoria por invalidez de aeronauta", "34 - Aposentadoria por invalidez de ex-combatente marítimo", "37 - Aposentadoria de extranumerário da Capin", "38 - Aposentadoria de extranumerário – funcionários públicos federais", "40 - Renda mensal vitalícia por idade", "41 - Aposentadoria por idade", "42 - Aposentadoria por tempo de contribuição", "43 - Aposentadoria por tempo de serviço para ex-combatente", "44 - Aposentadoria especial de aeronauta", "45 - Aposentadoria por tempo de serviço – jornalista profissional", "46 - Aposentadoria especial", "49 - Aposentadoria ordinária", "51 - Aposentadoria por invalidez – extinto plano básico", "52 - Aposentadoria por idade – extinto plano básico", "54 - Pensão indenizatória a cargo da União", "55 - Pensão por morte – extinto plano básico", "56 - Pensão mensal vitalícia – síndrome da talidomida", "57 - Aposentadoria por tempo de serviço de professores", "58 - Aposentadoria de anistiados", "59 - Pensão por morte de anistiados", "60 - Benefício indenizatório a cargo da União", "72 - Aposentadoria por tempo de serviço", "78 - Aposentadoria por idade", "81 - Aposentadoria compulsória (ex-sasse)", "82 - Aposentadoria por tempo de serviço (ex-sasse)", "83 - Aposentadoria por invalidez (ex-sasse)", "84 - Pensão por morte (ex-sasse)", "87 - BPC/LOAS – pessoa com deficiência", "88 - BPC/LOAS – pessoa idosa", "89 - Pensão especial para vítimas de hemodiálise – Caruaru", "92 - Aposentadoria por invalidez por acidente de trabalho", "93 - Pensão por morte por acidente de trabalho", "96 - Pensão especial – hanseníase"];
 
 let _pendingConfirm = null;
 function confirmAction(message, callback){
@@ -581,7 +625,8 @@ function renderClientes(){
 function getClientesFiltrados(){
   const term = (document.getElementById('clienteSearch')?.value||'').toLowerCase();
   let list = [...DB.clientes].sort((a,b)=>(b.dataCadastro||'').localeCompare(a.dataCadastro||''));
-  if(term) list = list.filter(c => (c.nome||'').toLowerCase().includes(term) || (c.cpf||'').includes(term) || (c.telefone||'').includes(term));
+  const termD = soDigitos(term);
+  if(term) list = list.filter(c => (c.nome||'').toLowerCase().includes(term) || (termD && (soDigitos(c.cpf).includes(termD) || soDigitos(c.telefone).includes(termD) || soDigitos(c.beneficio).includes(termD))));
   return list;
 }
 function renderClientesTable(){
@@ -589,16 +634,16 @@ function renderClientesTable(){
   const wrap = document.getElementById('clientesTableWrap');
   if(!list.length){ wrap.innerHTML = `<div class="empty">Nenhum cliente encontrado.</div>`; return; }
   wrap.innerHTML = `<div class="tableWrap"><table><thead><tr>
-    <th>Cliente</th><th>CPF</th><th>Nascimento</th><th>Telefone</th><th>Convênio</th><th>Origem</th><th>Cadastrado por</th><th>Data</th><th>Ações</th>
+    <th>Cliente</th><th>CPF</th><th>Nascimento</th><th>Telefone</th><th>Convênio</th><th>Benefício / Espécie</th><th>Origem</th><th>Cadastrado por</th><th>Data</th><th>Ações</th>
   </tr></thead><tbody>
   ${list.map(c=>`<tr>
-    <td><b>${esc(c.nome)}</b></td><td>${esc(c.cpf)}</td><td>${fmtDate(c.nascimento)}</td><td>${esc(c.telefone)}</td><td>${esc(c.convenio)}${c.uf?` (${esc(c.uf)})`:''}</td><td>${esc(c.origem||'-')}</td>
+    <td><b>${esc(c.nome)}</b></td><td>${esc(fmtCPF(c.cpf))}</td><td>${fmtDate(c.nascimento)}${idadeDe(c.nascimento)!=null?`<br><span class="muted" style="font-size:11.5px;">${idadeDe(c.nascimento)} anos</span>`:''}</td><td>${esc(c.telefone)}</td><td>${esc(c.convenio)}${c.uf?` (${esc(c.uf)})`:''}</td><td>${esc(c.beneficio||'-')}${c.especie?`<br><span class="muted" style="font-size:11.5px;">${esc(c.especie)}</span>`:''}</td><td>${esc(c.origem||'-')}</td>
     <td>${esc(c.cadastradoPor)}</td><td>${fmtDate(c.dataCadastro)}</td>
     <td>
       <button class="iconbtn" title="Editar" onclick="openClienteForm('${c.id}')">✏️</button>
       <button class="iconbtn" title="Nova Proposta" onclick="goTab('propostas');setTimeout(()=>openPropostaForm(null,'${c.cpf}'),0)">📄</button>
       <button class="iconbtn" title="Documentos" onclick="openDocumentos('${c.cpf}')">📎</button>
-      <button class="iconbtn" title="Excluir" onclick="deleteCliente('${c.id}')">🗑️</button>
+      ${canDelete(c)?`<button class="iconbtn" title="Excluir" onclick="deleteCliente('${c.id}')">🗑️</button>`:''}
     </td>
   </tr>`).join('')}
   </tbody></table></div>`;
@@ -615,8 +660,8 @@ function downloadCSV(filename, headers, rows){
 function exportarClientesCSV(){
   const list = getClientesFiltrados();
   if(!list.length){ toast('Nenhum cliente para exportar.'); return; }
-  const headers = ['Nome','CPF','Nascimento','Telefone','Convênio','UF','Origem','Cadastrado por','Data de cadastro'];
-  const rows = list.map(c=>[c.nome, c.cpf, fmtDate(c.nascimento), c.telefone, c.convenio, c.uf||'', c.origem||'', c.cadastradoPor, fmtDate(c.dataCadastro)]);
+  const headers = ['Nome','CPF','Nascimento','Idade','Telefone','Convênio','UF','Nº benefício / matrícula','Espécie','Origem','Cadastrado por','Data de cadastro'];
+  const rows = list.map(c=>[c.nome, fmtCPF(c.cpf), fmtDate(c.nascimento), idadeDe(c.nascimento)??'', c.telefone, c.convenio, c.uf||'', c.beneficio||'', c.especie||'', c.origem||'', c.cadastradoPor, fmtDate(c.dataCadastro)]);
   downloadCSV('clientes_'+todayISO()+'.csv', headers, rows);
 }
 function canDelete(record){ return currentUser.role==='gestora' || record.cadastradoPor===currentUser.nome; }
@@ -631,14 +676,16 @@ function openClienteForm(id){
     <h3>${c?'Editar Cliente':'Novo Cliente'}</h3>
     <div class="grid c2">
       <div class="field" style="grid-column:1/-1"><label>Nome completo</label><input id="f_nome" value="${c?esc(c.nome):''}"></div>
-      <div class="field"><label>CPF</label><input id="f_cpf" value="${c?esc(c.cpf):''}" placeholder="000.000.000-00"></div>
+      <div class="field"><label>CPF</label><input id="f_cpf" value="${c?esc(fmtCPF(c.cpf)):''}" placeholder="000.000.000-00" inputmode="numeric" maxlength="14" oninput="maskCPF(this)"></div>
       <div class="field"><label>Data de nascimento</label><input type="date" id="f_nasc" value="${c?c.nascimento||'':''}"></div>
-      <div class="field"><label>Telefone</label><input id="f_tel" value="${c?esc(c.telefone):''}" placeholder="(41) 99999-9999"></div>
+      <div class="field"><label>Telefone</label><input id="f_tel" value="${c?esc(c.telefone):''}" placeholder="(41) 99999-9999" inputmode="numeric" maxlength="15" oninput="maskTel(this)"></div>
       <div class="field" style="display:flex;gap:8px;align-items:flex-end;">
         <div style="flex:1;"><label>Convênio</label><select id="f_conv" onchange="toggleUFField()">${CONVENIOS.map(v=>`<option ${c&&c.convenio===v?'selected':''}>${v}</option>`).join('')}</select></div>
         <div id="f_ufWrap" style="width:90px;display:${mostrarUF?'block':'none'};"><label>UF</label><select id="f_uf">${UFS.map(u=>`<option ${c&&c.uf===u?'selected':''}>${u}</option>`).join('')}</select></div>
       </div>
       <div class="field"><label>Origem (de onde veio o cliente)</label><select id="f_origem"><option value="">Selecione...</option>${ORIGENS.map(v=>`<option ${c&&c.origem===v?'selected':''}>${v}</option>`).join('')}</select></div>
+      <div class="field"><label>Nº do benefício / matrícula</label><input id="f_benef" value="${c?esc(c.beneficio||''):''}" placeholder="Ex: 123.456.789-0"></div>
+      <div class="field"><label>Espécie</label><select id="f_especie"><option value="">Selecione...</option>${(c&&c.especie&&!ESPECIES.includes(c.especie)?[c.especie]:[]).concat(ESPECIES).map(e=>`<option ${c&&c.especie===e?'selected':''}>${esc(e)}</option>`).join('')}</select></div>
     </div>
     <div class="modalActions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
@@ -652,17 +699,22 @@ function toggleUFField(){
 }
 async function saveCliente(id){
   const nome = document.getElementById('f_nome').value.trim();
-  const cpf = document.getElementById('f_cpf').value.trim();
+  const cpf = fmtCPF(document.getElementById('f_cpf').value);
   if(!nome || !cpf){ toast('Preencha nome e CPF.'); return; }
+  if(!cpfValido(cpf)){ toast('CPF inválido. Confira os números (formato 000.000.000-00).'); return; }
+  const dup = DB.clientes.find(x=>x.id!==id && mesmoCPF(x.cpf, cpf));
+  if(dup){ toast(`Este CPF já está cadastrado: ${dup.nome} (por ${dup.cadastradoPor||'-'}).`); return; }
   lockSaveBtn();
   const convenio = document.getElementById('f_conv').value;
   const mostraUF = (convenio==='GOV'||convenio==='PREFEITURA');
   const data = {
     nome, cpf,
     nascimento: document.getElementById('f_nasc').value,
-    telefone: document.getElementById('f_tel').value.trim(),
+    telefone: fmtTel(document.getElementById('f_tel').value),
     convenio, uf: mostraUF ? document.getElementById('f_uf').value : '',
-    origem: document.getElementById('f_origem').value
+    origem: document.getElementById('f_origem').value,
+    beneficio: document.getElementById('f_benef').value.trim(),
+    especie: document.getElementById('f_especie').value.trim()
   };
   let record;
   if(id){
@@ -677,6 +729,10 @@ async function saveCliente(id){
   renderClientesTable();
 }
 function deleteCliente(id){
+  const c = DB.clientes.find(x=>x.id===id); if(!c) return;
+  if(!canDelete(c)){ toast('Só a gestora ou quem cadastrou pode excluir este cliente.'); return; }
+  const props = DB.propostas.filter(p=>mesmoCPF(p.clienteCpf, c.cpf));
+  if(props.length){ toast(`Este cliente tem ${props.length} proposta(s). Exclua as propostas antes.`); return; }
   confirmAction('Excluir este cliente?', async ()=>{
     DB.clientes = DB.clientes.filter(c=>c.id!==id);
     const ok = await removeRecord('clientes', id);
@@ -750,25 +806,35 @@ function exportarPropostasCSV(){
 function openPropostaForm(id, prefillCpf){
   const p = id ? DB.propostas.find(x=>x.id===id) : null;
   const isGestora = currentUser.role==='gestora';
-  const clientOptions = DB.clientes.map(c=>`<option value="${esc(c.cpf)}">${esc(c.nome)}</option>`).join('');
+  const clientOptions = DB.clientes.map(c=>`<option value="${esc(fmtCPF(c.cpf))}">${esc(c.nome)}</option>`).join('');
   const vendedoraAtual = p ? (p.vendedora||p.cadastradoPor) : currentUser.nome;
   const vendedorasOpts = Object.values(USERS).map(u=>u.nome);
   showModal(`
     <button class="closeX" onclick="closeModal()">✕</button>
     <h3>${p?'Editar Proposta':'Nova Proposta'}</h3>
     <div class="field"><label>CPF do Cliente (selecione um cliente já cadastrado)</label>
-      <input id="pf_cpf" list="cpfList" value="${p?esc(p.clienteCpf):(prefillCpf||'')}" onchange="autofillClienteProposta()" placeholder="Digite ou selecione o CPF">
+      <input id="pf_cpf" list="cpfList" value="${esc(fmtCPF(p?p.clienteCpf:(prefillCpf||'')))}" oninput="maskCPF(this);autofillClienteProposta()" onchange="autofillClienteProposta()" placeholder="000.000.000-00" inputmode="numeric" maxlength="14">
       <datalist id="cpfList">${clientOptions}</datalist>
     </div>
     <div id="pf_clienteInfo" class="muted" style="margin:-6px 0 14px;font-size:12.5px;"></div>
+    <div id="pf_docsBox" class="card" style="background:#fff8ef;border-color:#f5d3a6;display:none;">
+      <h3 style="margin-bottom:10px;">Documentos do cliente <span id="pf_docsCount" class="muted" style="font-weight:600;font-size:12.5px;"></span></h3>
+      <div class="grid c2">
+        <div class="field"><label>Tipo do documento</label><select id="doc_tipo">${DOC_TIPOS.map(t=>`<option>${t}</option>`).join('')}</select></div>
+        <div class="field"><label>Arquivos (fotos ou PDF)</label><input type="file" id="doc_files" multiple accept="image/*,application/pdf"></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;"><button class="btn btn-orange btn-sm" id="doc_btnEnviar" onclick="enviarDocumentos()">⬆️ Anexar</button></div>
+      <div id="doc_progresso" class="muted" style="font-size:12.5px;margin-top:6px;"></div>
+      <div id="doc_lista" style="margin-top:8px;"></div>
+    </div>
     ${isGestora ? `<div class="field"><label>Vendedora (quem recebe a comissão)</label><select id="pf_vendedora">${vendedorasOpts.map(v=>`<option ${vendedoraAtual===v?'selected':''}>${v}</option>`).join('')}</select></div>` : ''}
     <div class="grid c3">
       <div class="field"><label>Data da venda</label><input type="date" id="pf_data" value="${p?p.dataVenda:todayISO()}"></div>
       <div class="field"><label>Banco</label><input id="pf_banco" value="${p?esc(p.banco):''}" placeholder="Digite o nome do banco"></div>
       <div class="field"><label>Promotora</label><select id="pf_promotora"><option value="">Selecione...</option>${PROMOTORAS.map(pr=>`<option ${p&&p.promotora===pr?'selected':''}>${pr}</option>`).join('')}</select></div>
       <div class="field"><label>Modalidade</label><select id="pf_modal" onchange="toggleModalidadeExtras()">${MODALIDADES.map(m=>`<option ${p&&p.modalidade===m?'selected':''}>${m}</option>`).join('')}</select></div>
-      <div class="field"><label>Valor liberado (R$)</label><input type="number" step="0.01" id="pf_valor" value="${p?p.valor:''}" oninput="calcComissaoPreview()"></div>
-      <div class="field"><label>Parcela (R$)</label><input type="number" step="0.01" id="pf_parcela" value="${p?p.parcela:''}"></div>
+      <div class="field"><label>Valor liberado (R$)</label><input id="pf_valor" inputmode="numeric" placeholder="R$ 0,00" value="${p?brlInput(p.valor):''}" oninput="maskBRL(this);calcComissaoPreview()"></div>
+      <div class="field"><label>Parcela (R$)</label><input id="pf_parcela" inputmode="numeric" placeholder="R$ 0,00" value="${p?brlInput(p.parcela):''}" oninput="maskBRL(this)"></div>
       <div class="field"><label>Prazo (meses)</label><input type="number" id="pf_prazo" value="${p?p.prazo:''}"></div>
       <div class="field"><label>Status</label><select id="pf_status">${STATUS_PROPOSTA.map(s=>`<option ${p&&p.status===s?'selected':''}>${s}</option>`).join('')}</select></div>
     </div>
@@ -776,8 +842,8 @@ function openPropostaForm(id, prefillCpf){
       <div class="card" style="background:#f8fafc;">
         <h3 style="margin-top:0;">Portabilidade + Refin — dados da operação</h3>
         <div class="grid c3">
-          <div class="field"><label>Saldo devedor (portabilidade) R$</label><input type="number" step="0.01" id="pf_saldoDevedor" value="${p?p.saldoDevedor||'':''}" oninput="atualizarValorPortRefin()"></div>
-          <div class="field"><label>Valor refin liberado — líquido (R$)</label><input type="number" step="0.01" id="pf_valorRefinLiq" value="${p?p.valorRefinLiq||'':''}" oninput="atualizarValorPortRefin()"></div>
+          <div class="field"><label>Saldo devedor (portabilidade) R$</label><input id="pf_saldoDevedor" inputmode="numeric" placeholder="R$ 0,00" value="${p?brlInput(p.saldoDevedor):''}" oninput="maskBRL(this);atualizarValorPortRefin()"></div>
+          <div class="field"><label>Valor refin liberado — líquido (R$)</label><input id="pf_valorRefinLiq" inputmode="numeric" placeholder="R$ 0,00" value="${p?brlInput(p.valorRefinLiq):''}" oninput="maskBRL(this);atualizarValorPortRefin()"></div>
           <div class="field"><label>Como esse banco remunera?</label><select id="pf_remuneracao" onchange="toggleRemuneracao()">
             <option value="bruto" ${p&&p.remuneracao==='bruto'?'selected':''}>Bruto (uma comissão sobre a soma)</option>
             <option value="liquido" ${p&&p.remuneracao==='liquido'?'selected':''}>Líquido (comissão separada: % portabilidade + % refin)</option>
@@ -791,7 +857,7 @@ function openPropostaForm(id, prefillCpf){
     </div>
     <div id="pf_genericComissaoWrap" class="grid c2">
       <div class="field"><label>% Comissão total (se souber só o %)</label><input type="number" step="0.01" id="pf_pct" value="${p?p.comissaoPct:''}" placeholder="Ex: 8" oninput="calcComissaoPreview()"></div>
-      <div class="field"><label>OU Comissão total em R$ (se souber o valor exato)</label><input type="number" step="0.01" id="pf_comTotalManual" value="${p&&p.comissaoTotalManual?p.comissaoTotal:''}" placeholder="Ex: 849,19" oninput="calcComissaoPreview()"></div>
+      <div class="field"><label>OU Comissão total em R$ (se souber o valor exato)</label><input id="pf_comTotalManual" inputmode="numeric" value="${p&&p.comissaoTotalManual?brlInput(p.comissaoTotal):''}" placeholder="R$ 0,00" oninput="maskBRL(this);calcComissaoPreview()"></div>
     </div>
     <div class="card" style="background:#f8fafc;margin-top:4px;">
       <div class="grid c3" style="gap:8px;">
@@ -825,9 +891,9 @@ function toggleModalidadeExtras(){
   }
 }
 function atualizarValorPortRefin(){
-  const saldo = Number(document.getElementById('pf_saldoDevedor')?.value)||0;
-  const refin = Number(document.getElementById('pf_valorRefinLiq')?.value)||0;
-  document.getElementById('pf_valor').value = (saldo+refin).toFixed(2);
+  const saldo = valBRL('pf_saldoDevedor');
+  const refin = valBRL('pf_valorRefinLiq');
+  document.getElementById('pf_valor').value = brlInput(saldo+refin);
   calcComissaoPreview();
 }
 function toggleRemuneracao(){
@@ -839,27 +905,37 @@ function toggleRemuneracao(){
   calcComissaoPreview();
 }
 function findClienteAcessivel(cpf){
-  return DB.clientes.find(x=>x.cpf===cpf) || null;
+  return DB.clientes.find(x=>mesmoCPF(x.cpf, cpf)) || null;
 }
+let _pfDocsCpf = null, _docsCount = null;
 function autofillClienteProposta(){
   const cpf = document.getElementById('pf_cpf').value.trim();
   const c = findClienteAcessivel(cpf);
   const info = document.getElementById('pf_clienteInfo');
-  if(c){ info.innerHTML = `<b>${esc(c.nome)}</b> · ${esc(c.telefone)} · ${esc(c.convenio)}${c.uf?` (${esc(c.uf)})`:''}`; }
-  else { info.innerHTML = `<span style="color:var(--red)">Cliente não encontrado — cadastre-o primeiro em Clientes.</span>`; }
+  const box = document.getElementById('pf_docsBox');
+  if(c){
+    const idade = idadeDe(c.nascimento);
+    info.innerHTML = `<b>${esc(c.nome)}</b> · ${esc(c.telefone)} · ${esc(c.convenio)}${c.uf?` (${esc(c.uf)})`:''}`
+      + `<br>${idade!=null?`<b style="color:var(--navy)">${idade} anos</b>`:'<span style="color:var(--red)">Sem data de nascimento</span>'}`
+      + `${c.beneficio?` · Benefício ${esc(c.beneficio)}`:''}${c.especie?` · Espécie ${esc(c.especie)}`:''}`;
+    if(box){ box.style.display='block'; if(_pfDocsCpf!==c.cpf){ _pfDocsCpf=c.cpf; _docsCpf=c.cpf; carregarListaDocumentos(); } }
+  } else {
+    info.innerHTML = soDigitos(cpf).length===11 ? `<span style="color:var(--red)">Cliente não encontrado — cadastre-o primeiro em Clientes.</span>` : '';
+    if(box) box.style.display='none'; _pfDocsCpf=null;
+  }
 }
 function calcComissaoTotalAtual(){
-  const manual = Number(document.getElementById('pf_comTotalManual')?.value)||0;
+  const manual = valBRL('pf_comTotalManual');
   if(manual>0) return manual;
   const modal = document.getElementById('pf_modal')?.value;
   if(modal === 'Portabilidade + Refin' && document.getElementById('pf_remuneracao')?.value === 'liquido'){
-    const saldo = Number(document.getElementById('pf_saldoDevedor')?.value)||0;
-    const refin = Number(document.getElementById('pf_valorRefinLiq')?.value)||0;
+    const saldo = valBRL('pf_saldoDevedor');
+    const refin = valBRL('pf_valorRefinLiq');
     const pctPort = Number(document.getElementById('pf_pctPort')?.value)||0;
     const pctRefin = Number(document.getElementById('pf_pctRefin')?.value)||0;
     return (saldo*pctPort/100) + (refin*pctRefin/100);
   }
-  const valor = Number(document.getElementById('pf_valor')?.value)||0;
+  const valor = valBRL('pf_valor');
   const pct = Number(document.getElementById('pf_pct')?.value)||0;
   return valor*pct/100;
 }
@@ -872,14 +948,23 @@ function calcComissaoPreview(){
   document.getElementById('pf_comVend').textContent = brl(vend);
 }
 async function saveProposta(id){
-  const cpf = document.getElementById('pf_cpf').value.trim();
-  const cliente = findClienteAcessivel(cpf);
+  const cliente = findClienteAcessivel(document.getElementById('pf_cpf').value);
   if(!cliente){ toast('Selecione um cliente válido.'); return; }
+  const cpf = cliente.cpf;
   const modalidade = document.getElementById('pf_modal').value;
   const isPR = modalidade === 'Portabilidade + Refin';
-  const valor = Number(document.getElementById('pf_valor').value)||0;
+  const valor = valBRL('pf_valor');
   const pct = Number(document.getElementById('pf_pct').value)||0;
-  const comTotalManual = Number(document.getElementById('pf_comTotalManual')?.value)||0;
+  const comTotalManual = valBRL('pf_comTotalManual');
+  if(!document.getElementById('pf_data').value){ toast('Informe a data da venda.'); return; }
+  if(!document.getElementById('pf_banco').value.trim()){ toast('Informe o banco.'); return; }
+  if(!document.getElementById('pf_promotora').value){ toast('Selecione a promotora.'); return; }
+  if(!(valor>0)){ toast('Informe o valor.'); return; }
+  if(!id){
+    const qtdDocs = await contarDocumentos(cpf);
+    if(qtdDocs===0){ toast('Anexe os documentos do cliente antes de cadastrar a venda.'); const b=document.getElementById('pf_docsBox'); if(b) b.scrollIntoView({behavior:'smooth'}); return; }
+    if(qtdDocs===null){ toast('Não consegui conferir os documentos agora. Tente de novo.'); return; }
+  }
   const remuneracao = isPR ? document.getElementById('pf_remuneracao').value : '';
   const pctPort = isPR ? Number(document.getElementById('pf_pctPort')?.value)||0 : 0;
   const pctRefin = isPR ? Number(document.getElementById('pf_pctRefin')?.value)||0 : 0;
@@ -897,12 +982,12 @@ async function saveProposta(id){
     banco: document.getElementById('pf_banco').value.trim(),
     promotora: document.getElementById('pf_promotora').value,
     modalidade,
-    valor, parcela: Number(document.getElementById('pf_parcela').value)||0, prazo: Number(document.getElementById('pf_prazo').value)||0,
+    valor, parcela: valBRL('pf_parcela'), prazo: Number(document.getElementById('pf_prazo').value)||0,
     status: document.getElementById('pf_status').value,
     comissaoPct: comissaoPctFinal, comissaoTotalManual: comTotalManual>0, comissaoTotal, comissaoAgiliza, comissaoVendedora,
     vendedora,
-    saldoDevedor: isPR ? (Number(document.getElementById('pf_saldoDevedor').value)||0) : null,
-    valorRefinLiq: isPR ? (Number(document.getElementById('pf_valorRefinLiq').value)||0) : null,
+    saldoDevedor: isPR ? valBRL('pf_saldoDevedor') : null,
+    valorRefinLiq: isPR ? valBRL('pf_valorRefinLiq') : null,
     remuneracao: isPR ? remuneracao : '',
     pctPort: isPR ? pctPort : null,
     pctRefin: isPR ? pctRefin : null
@@ -970,9 +1055,16 @@ async function carregarListaDocumentos(){
   const wrap = document.getElementById('doc_lista'); if(!wrap) return;
   if(!firebaseOk){ wrap.innerHTML = `<div class="empty">Sem conexão com o banco de dados.</div>`; return; }
   try{
-    const snap = await db.collection('documentos').where('clienteCpf','==',_docsCpf).get();
+    const snap = await db.collection('documentos').where('clienteCpf','in',cpfVariantes(_docsCpf)).get();
     const docs = snap.docs.map(d=>d.data()).sort((a,b)=>(b.criadoEm||'').localeCompare(a.criadoEm||''));
+    _docsCount = docs.length;
+    const cnt = document.getElementById('pf_docsCount');
+    if(cnt) cnt.innerHTML = docs.length ? `· ${docs.length} anexado(s)` : `· <span style="color:var(--red)">obrigatório para cadastrar a venda</span>`;
     if(!docs.length){ wrap.innerHTML = `<div class="empty">Nenhum documento anexado ainda.</div>`; return; }
+    if(document.getElementById('pf_docsBox')){
+      wrap.innerHTML = docs.map(d=>`<div class="metaLine"><span>${esc(d.tipo)}</span><b>${esc(d.nomeArquivo)}</b></div>`).join('');
+      return;
+    }
     wrap.innerHTML = `<div class="tableWrap"><table><thead><tr><th>Tipo</th><th>Arquivo</th><th>Tamanho</th><th>Enviado por</th><th>Data</th><th>Ações</th></tr></thead><tbody>
       ${docs.map(d=>`<tr>
         <td><b>${esc(d.tipo)}</b></td><td>${esc(d.nomeArquivo)}</td><td>${fmtBytes(d.tamanho)}</td>
@@ -989,6 +1081,11 @@ async function carregarListaDocumentos(){
   }
 }
 
+async function contarDocumentos(cpf){
+  if(!firebaseOk) return null;
+  try{ const snap = await db.collection('documentos').where('clienteCpf','in',cpfVariantes(cpf)).get(); return snap.size; }
+  catch(e){ console.error('count docs error', e); return null; }
+}
 function lerArquivoDataURL(file){
   return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
 }
