@@ -1737,144 +1737,414 @@ function copiarWhatsapp(){
 function limparSimulador(){ simPortabRows=[]; simRefinRows=[]; renderSimulador(); }
 
 /* ============================= FINANCEIRO ============================= */
+// Regras:
+// - Comissão "recebida" = dinheiro que a promotora pagou (data de recebimento). Integrada ≠ recebida.
+// - A cada comissão recebida: % da consultora (config), % caixinha (config.caixinhaPct), % imposto (config.impostoPct), o resto vai para as contas.
+// - Despesas fixas ficam em DB.config.despesasFixas e viram lançamentos do mês com id fixo (fx_<fixa>_<AAAA-MM>), sem duplicar.
+const CATEGORIAS_DESP = ['Equipe','Ferramentas','Loja','Retirada','Impostos','Extras'];
 let finTab = 'comissoes';
+let finMes = todayISO().slice(0,7);
+const NOMES_MESES = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+function fmtMesLongo(ym){ const [y,m]=ym.split('-'); return `${NOMES_MESES[Number(m)-1]}/${y}`; }
+function cfgNum(k, def){ const v = DB.config && DB.config[k]; return (v===undefined||v===null||v==='') ? def : Number(v); }
+function mesDe(iso){ return (iso||'').slice(0,7); }
+function despMes(d){ return d.mes || mesDe(d.vencimento); }
+function despDataPag(d){ return d.dataPagamento || (d.pago ? (d.vencimento||'') : ''); }
+function finMesesOpts(){
+  const set = new Set([todayISO().slice(0,7), finMes]);
+  DB.propostas.forEach(p=>{ if(p.dataVenda) set.add(mesDe(p.dataVenda)); if(p.dataRecebimento) set.add(mesDe(p.dataRecebimento)); });
+  DB.despesas.forEach(d=>{ const m=despMes(d); if(m) set.add(m); });
+  // próximo mês, para lançar fixas com antecedência
+  const [y,m] = todayISO().slice(0,7).split('-').map(Number); const nx = new Date(y,m,1);
+  set.add(nx.getFullYear()+'-'+String(nx.getMonth()+1).padStart(2,'0'));
+  return [...set].filter(Boolean).sort().reverse();
+}
+function splitComissao(p){
+  const total = Number(p.comissaoTotal||0);
+  const consultora = Number(p.comissaoVendedora||0);
+  const caixinha = total * cfgNum('caixinhaPct',10)/100;
+  const imposto = total * cfgNum('impostoPct',0)/100;
+  return {total, consultora, caixinha, imposto, contas: total - consultora - caixinha - imposto};
+}
+
 function renderFinanceiro(){
   const isGestora = currentUser.role==='gestora';
+  const tabs = [['comissoes','💰 Comissões']];
+  if(isGestora) tabs.push(['despesas','💸 Despesas'],['caixa','🏦 Caixa'],['dre','📊 DRE']);
+  if(!tabs.find(t=>t[0]===finTab)) finTab='comissoes';
   document.getElementById('mainArea').innerHTML = `
-    <div class="pageHead"><h2>Financeiro</h2></div>
-    <div class="simTabs">
-      <button class="${finTab==='comissoes'?'active':''}" onclick="setFinTab('comissoes')">💰 Comissões</button>
-      ${isGestora?`<button class="${finTab==='despesas'?'active':''}" onclick="setFinTab('despesas')">💸 Despesas</button>
-      <button class="${finTab==='dre'?'active':''}" onclick="setFinTab('dre')">📊 DRE</button>`:''}
+    <div class="pageHead"><h2>Financeiro <span class="muted" style="font-weight:600;font-size:15px;">— ${fmtMesLongo(finMes)}</span></h2>
+      <select onchange="finMes=this.value;renderFinanceiro()" style="width:auto;min-width:170px;">
+        ${finMesesOpts().map(m=>`<option value="${m}" ${m===finMes?'selected':''}>${fmtMesLongo(m)}</option>`).join('')}
+      </select>
     </div>
+    <div class="simTabs">${tabs.map(([k,l])=>`<button class="${finTab===k?'active':''}" onclick="setFinTab('${k}')">${l}</button>`).join('')}</div>
     <div id="finContent"></div>
   `;
   renderFinContent();
 }
-function setFinTab(t){ finTab=t; renderFinancerio_safe(); }
-function renderFinancerio_safe(){
-  document.querySelectorAll('.simTabs button').forEach(b=>b.classList.remove('active'));
-  renderFinanceiro();
-}
-function renderFinContent(){
-  const isGestora = currentUser.role==='gestora';
-  const el = document.getElementById('finContent');
-  const mine = isGestora ? DB.propostas : DB.propostas.filter(p=>vendedoraDe(p)===currentUser.nome);
+function setFinTab(t){ finTab=t; renderFinanceiro(); }
+function renderFinancerio_safe(){ renderFinanceiro(); }
 
-  if(finTab==='comissoes'){
-    const integradas = mine.filter(p=>p.status==='Integrada');
-    const totalComissao = integradas.reduce((s,p)=>s+Number(p.comissaoTotal||0),0);
-    const totalAgiliza = integradas.reduce((s,p)=>s+Number(p.comissaoAgiliza||0),0);
-    const totalVendedora = integradas.reduce((s,p)=>s+Number(p.comissaoVendedora||0),0);
-    const pagas = integradas.filter(p=>p.comissaoPaga).reduce((s,p)=>s+Number(p.comissaoVendedora||0),0);
-    const aPagar = totalVendedora - pagas;
+function renderFinContent(){
+  const el = document.getElementById('finContent'); if(!el) return;
+  if(finTab==='despesas') return renderFinDespesas(el);
+  if(finTab==='caixa') return renderFinCaixa(el);
+  if(finTab==='dre') return renderFinDRE(el);
+  return renderFinComissoes(el);
+}
+
+/* ---------- Comissões ---------- */
+function renderFinComissoes(el){
+  const isGestora = currentUser.role==='gestora';
+  const base = (isGestora ? DB.propostas : DB.propostas.filter(p=>vendedoraDe(p)===currentUser.nome)).filter(p=>p.status==='Integrada');
+  // do mês: vendidas no mês, recebidas no mês, ou ainda pendentes (para nada ficar esquecido)
+  const lista = base.filter(p=> mesDe(p.dataVenda)===finMes || mesDe(p.dataRecebimento)===finMes || (!p.comissaoRecebida && mesDe(p.dataVenda)<=finMes) || (p.comissaoRecebida && !p.comissaoPaga))
+    .sort((a,b)=>(b.dataVenda||'').localeCompare(a.dataVenda||''));
+  const soma = (arr,k)=>arr.reduce((s,p)=>s+Number(p[k]||0),0);
+
+  if(!isGestora){
+    const doMes = base.filter(p=>mesDe(p.dataVenda)===finMes);
+    const pagasMes = base.filter(p=>p.comissaoPaga && mesDe(p.dataPagamento)===finMes);
+    const pendentes = base.filter(p=>!p.comissaoPaga);
     el.innerHTML = `
       <div class="kpis">
-        ${isGestora?`<div class="kpi"><div class="lbl">Comissão Total Recebida</div><div class="val">${brl(totalComissao)}</div></div>`:''}
-        ${isGestora?`<div class="kpi"><div class="lbl">Com. Empresa total</div><div class="val">${brl(totalAgiliza)}</div></div>`:''}
-        <div class="kpi orange"><div class="lbl">${isGestora?'Com. Vendedoras total':'Minha comissão total'}</div><div class="val">${brl(totalVendedora)}</div></div>
-        <div class="kpi green"><div class="lbl">Comissões pagas</div><div class="val">${brl(pagas)}</div></div>
-        <div class="kpi red"><div class="lbl">A pagar</div><div class="val">${brl(aPagar)}</div></div>
+        <div class="kpi orange"><div class="lbl">Minha comissão — vendas do mês</div><div class="val">${brl(soma(doMes,'comissaoVendedora'))}</div></div>
+        <div class="kpi green"><div class="lbl">Recebi no mês</div><div class="val">${brl(soma(pagasMes,'comissaoVendedora'))}</div></div>
+        <div class="kpi red"><div class="lbl">A receber</div><div class="val">${brl(soma(pendentes,'comissaoVendedora'))}</div></div>
       </div>
-      <div class="card">
-        <div class="tableWrap"><table><thead><tr>
-          <th>Cliente</th>${isGestora?'<th>Consultora</th>':''}<th>Valor</th>${isGestora?'<th>Comissão Total</th><th>Com. Empresa</th>':''}<th>Com. Vendedora</th><th>Status</th>${isGestora?'<th>Ações</th>':''}
-        </tr></thead><tbody>
-        ${integradas.length? integradas.sort((a,b)=>(b.dataVenda||'').localeCompare(a.dataVenda||'')).map(p=>`<tr>
+      <div class="card"><div class="tableWrap"><table><thead><tr><th>Cliente</th><th>Valor</th><th>Minha comissão</th><th>Status</th></tr></thead><tbody>
+        ${lista.length ? lista.map(p=>`<tr>
           <td><b>${esc(p.clienteNome)}</b><br><span class="muted" style="font-size:11.5px;">${fmtDate(p.dataVenda)}</span></td>
-          ${isGestora?`<td>${esc(vendedoraDe(p))}</td>`:''}<td>${brl(p.valor)}</td>${isGestora?`<td><b>${brl(p.comissaoTotal)}</b></td><td>${brl(p.comissaoAgiliza)}</td>`:''}<td>${brl(p.comissaoVendedora)}</td>
-          <td><span class="pill ${p.comissaoPaga?'paga':'pendente'}">${p.comissaoPaga?'Paga':'Pendente'}</span></td>
-          ${isGestora?`<td>${!p.comissaoPaga?`<button class="iconbtn" title="Marcar como paga" onclick="marcarComissaoPaga('${p.id}')">✓</button>`:''}</td>`:''}
-        </tr>`).join('') : `<tr><td colspan="${isGestora?8:4}" class="empty">Nenhuma comissão gerada ainda.</td></tr>`}
-        </tbody></table></div>
-      </div>
-    `;
-  } else if(finTab==='despesas'){
-    const total = DB.despesas.reduce((s,d)=>s+Number(d.valor||0),0);
-    const pagas = DB.despesas.filter(d=>d.pago).reduce((s,d)=>s+Number(d.valor||0),0);
-    const pendentes = total-pagas;
-    el.innerHTML = `
-      <div class="kpis">
-        <div class="kpi red"><div class="lbl">Total despesas</div><div class="val">${brl(total)}</div></div>
-        <div class="kpi green"><div class="lbl">Pagas</div><div class="val">${brl(pagas)}</div></div>
-        <div class="kpi orange"><div class="lbl">Pendentes</div><div class="val">${brl(pendentes)}</div></div>
-      </div>
-      <div class="pageHead"><h3 style="margin:0;">Lançamentos</h3><button class="btn btn-orange btn-sm" onclick="openDespesaForm()">+ Nova Despesa</button></div>
-      <div class="card">
-        <div class="tableWrap"><table><thead><tr><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Vencimento</th><th>Status</th><th>Ações</th></tr></thead><tbody>
-        ${DB.despesas.length ? DB.despesas.map(d=>`<tr>
-          <td>${esc(d.descricao)}</td><td>${esc(d.categoria)}</td><td>${brl(d.valor)}</td><td>${fmtDate(d.vencimento)}</td>
-          <td><span class="pill ${d.pago?'paga':'pendente'}">${d.pago?'Paga':'Pendente'}</span></td>
-          <td>${!d.pago?`<button class="iconbtn" title="Marcar paga" onclick="marcarDespesaPaga('${d.id}')">✓</button>`:''}<button class="iconbtn" title="Excluir" onclick="deleteDespesa('${d.id}')">🗑️</button></td>
-        </tr>`).join('') : `<tr><td colspan="6" class="empty">Nenhuma despesa lançada.</td></tr>`}
-        </tbody></table></div>
-      </div>
-    `;
-  } else if(finTab==='dre'){
-    const integradas = DB.propostas.filter(p=>p.status==='Integrada');
-    const receitaAgiliza = integradas.reduce((s,p)=>s+Number(p.comissaoAgiliza||0),0);
-    const comissoesPagas = integradas.filter(p=>p.comissaoPaga).reduce((s,p)=>s+Number(p.comissaoVendedora||0),0);
-    const despesasPagas = DB.despesas.filter(d=>d.pago).reduce((s,d)=>s+Number(d.valor||0),0);
-    const resultado = receitaAgiliza - comissoesPagas - despesasPagas;
-    el.innerHTML = `
-      <div class="card">
-        <h3>DRE — Demonstrativo de Resultado</h3>
-        <div class="tableWrap"><table>
-          <tr><td><b>RECEITAS</b></td><td></td></tr>
-          <tr><td>Comissões Empresa (propostas integradas)</td><td style="text-align:right;color:var(--green);font-weight:700;">${brl(receitaAgiliza)}</td></tr>
-          <tr><td><b>COMISSÕES CONSULTORAS</b></td><td></td></tr>
-          <tr><td>Comissões pagas às consultoras</td><td style="text-align:right;color:var(--red);font-weight:700;">- ${brl(comissoesPagas)}</td></tr>
-          <tr><td><b>DESPESAS OPERACIONAIS</b></td><td></td></tr>
-          <tr><td>Total despesas pagas</td><td style="text-align:right;color:var(--red);font-weight:700;">- ${brl(despesasPagas)}</td></tr>
-          <tr style="border-top:2px solid var(--border);"><td style="padding-top:14px;"><b style="color:${resultado>=0?'var(--green)':'var(--red)'};font-size:15px;">${resultado>=0?'🏅 RESULTADO POSITIVO':'⚠️ RESULTADO NEGATIVO'}</b></td><td style="text-align:right;padding-top:14px;"><b style="font-size:17px;color:${resultado>=0?'var(--green)':'var(--red)'};">${brl(resultado)}</b></td></tr>
-        </table></div>
-      </div>
-    `;
+          <td>${brl(p.valor)}</td><td><b>${brl(p.comissaoVendedora)}</b></td>
+          <td><span class="pill ${p.comissaoPaga?'paga':'pendente'}">${p.comissaoPaga?'Paga em '+fmtDate(p.dataPagamento):'A receber'}</span></td>
+        </tr>`).join('') : `<tr><td colspan="4" class="empty">Nenhuma comissão neste mês.</td></tr>`}
+      </tbody></table></div></div>`;
+    return;
   }
+
+  const aReceber = base.filter(p=>!p.comissaoRecebida);
+  const recebidasMes = base.filter(p=>p.comissaoRecebida && mesDe(p.dataRecebimento)===finMes);
+  const consultorasAPagar = base.filter(p=>p.comissaoRecebida && !p.comissaoPaga);
+  const caixinhaMes = recebidasMes.reduce((s,p)=>s+splitComissao(p).caixinha,0);
+  el.innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><div class="lbl">A receber das promotoras</div><div class="val">${brl(soma(aReceber,'comissaoTotal'))}</div><div class="muted" style="font-size:12px;margin-top:4px;">${aReceber.length} proposta(s) integrada(s)</div></div>
+      <div class="kpi green"><div class="lbl">Recebido no mês</div><div class="val">${brl(soma(recebidasMes,'comissaoTotal'))}</div></div>
+      <div class="kpi red"><div class="lbl">Separar p/ consultoras</div><div class="val">${brl(soma(consultorasAPagar,'comissaoVendedora'))}</div><div class="muted" style="font-size:12px;margin-top:4px;">recebidas e ainda não pagas</div></div>
+      <div class="kpi orange"><div class="lbl">Caixinha do mês (${cfgNum('caixinhaPct',10)}%)</div><div class="val">${brl(caixinhaMes)}</div></div>
+    </div>
+    <div class="card"><div class="tableWrap"><table><thead><tr>
+      <th>Cliente</th><th>Consultora</th><th>Valor</th><th>Comissão total</th><th>Consultora</th><th>Promotora pagou?</th><th>Consultora paga?</th><th>Ações</th>
+    </tr></thead><tbody>
+      ${lista.length ? lista.map(p=>`<tr>
+        <td><b>${esc(p.clienteNome)}</b><br><span class="muted" style="font-size:11.5px;">${fmtDate(p.dataVenda)}</span></td>
+        <td>${esc(vendedoraDe(p))}</td><td>${brl(p.valor)}</td><td><b>${brl(p.comissaoTotal)}</b></td><td>${brl(p.comissaoVendedora)}</td>
+        <td><span class="pill ${p.comissaoRecebida?'paga':'pendente'}">${p.comissaoRecebida?'Recebida '+fmtDate(p.dataRecebimento):'A receber'}</span></td>
+        <td><span class="pill ${p.comissaoPaga?'paga':'pendente'}">${p.comissaoPaga?'Paga '+fmtDate(p.dataPagamento):'Pendente'}</span></td>
+        <td style="white-space:nowrap;">
+          ${!p.comissaoRecebida?`<button class="btn btn-sm btn-primary" onclick="openReceberComissao('${p.id}')">Recebi</button>`:''}
+          ${p.comissaoRecebida&&!p.comissaoPaga?`<button class="btn btn-sm btn-orange" onclick="marcarComissaoPaga('${p.id}')">Paguei consultora</button>`:''}
+          ${p.comissaoRecebida?`<button class="iconbtn" title="Desfazer recebimento" onclick="desfazerRecebimento('${p.id}')">↩</button>`:''}
+        </td>
+      </tr>`).join('') : `<tr><td colspan="8" class="empty">Nenhuma comissão neste mês.</td></tr>`}
+    </tbody></table></div></div>`;
 }
-async function marcarComissaoPaga(id){
-  const p = DB.propostas.find(x=>x.id===id);
-  p.comissaoPaga = true; p.dataPagamento = todayISO();
-  await saveRecord('propostas', p); renderFinContent();
-}
-function openDespesaForm(){
+function openReceberComissao(id){
+  const p = DB.propostas.find(x=>x.id===id); if(!p) return;
+  const s = splitComissao(p);
   showModal(`
     <button class="closeX" onclick="closeModal()">✕</button>
-    <h3>Nova Despesa</h3>
-    <div class="grid c2">
-      <div class="field" style="grid-column:1/-1"><label>Descrição</label><input id="d_desc"></div>
-      <div class="field"><label>Categoria</label><select id="d_cat"><option>Pessoal</option><option>Marketing</option><option>Operacional</option><option>Outros</option></select></div>
-      <div class="field"><label>Valor (R$)</label><input type="number" step="0.01" id="d_valor"></div>
-      <div class="field"><label>Vencimento</label><input type="date" id="d_venc"></div>
+    <h3>Comissão recebida</h3>
+    <p style="margin:-6px 0 14px;"><b>${esc(p.clienteNome)}</b> · ${esc(vendedoraDe(p))} · comissão de <b>${brl(s.total)}</b></p>
+    <div class="field" style="max-width:220px;"><label>Data do recebimento</label><input type="date" id="rc_data" value="${todayISO()}"></div>
+    <div class="card" style="margin:12px 0 0;background:#f3f7fd;">
+      <h3>Separe agora</h3>
+      <div class="metaLine"><span>Consultora (${esc(vendedoraDe(p))})</span><b>${brl(s.consultora)}</b></div>
+      <div class="metaLine"><span>Caixinha (${cfgNum('caixinhaPct',10)}%)</span><b>${brl(s.caixinha)}</b></div>
+      ${s.imposto?`<div class="metaLine"><span>Imposto (${cfgNum('impostoPct',0)}%)</span><b>${brl(s.imposto)}</b></div>`:''}
+      <div class="metaLine" style="border-top:1px dashed var(--border);margin-top:6px;padding-top:8px;"><span>Fica para as contas</span><b>${brl(s.contas)}</b></div>
     </div>
     <div class="modalActions">
       <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
-      <button class="btn btn-primary" id="modalSaveBtn" onclick="saveDespesa()">Salvar</button>
-    </div>
-  `);
+      <button class="btn btn-primary" id="modalSaveBtn" onclick="confirmarRecebimento('${p.id}')">Confirmar recebimento</button>
+    </div>`);
 }
-async function saveDespesa(){
+async function confirmarRecebimento(id){
+  const p = DB.propostas.find(x=>x.id===id); if(!p) return;
+  lockSaveBtn();
+  p.comissaoRecebida = true; p.dataRecebimento = document.getElementById('rc_data').value || todayISO();
+  const ok = await saveRecord('propostas', p);
+  if(ok){ closeModal(); toast('Recebimento registrado.'); } else unlockSaveBtn();
+  renderFinContent();
+}
+function desfazerRecebimento(id){
+  confirmAction('Desfazer o recebimento desta comissão?', async ()=>{
+    const p = DB.propostas.find(x=>x.id===id); if(!p) return;
+    p.comissaoRecebida = false; delete p.dataRecebimento;
+    await saveRecord('propostas', p); renderFinContent();
+  });
+}
+async function marcarComissaoPaga(id){
+  const p = DB.propostas.find(x=>x.id===id); if(!p) return;
+  p.comissaoPaga = true; p.dataPagamento = todayISO();
+  await saveRecord('propostas', p); renderFinContent();
+}
+
+/* ---------- Despesas ---------- */
+async function gerarFixasDoMes(ym){
+  const fixas = (DB.config.despesasFixas||[]).filter(f=>f.ativa!==false);
+  const novas = [];
+  fixas.forEach(f=>{
+    const id = 'fx_'+f.id+'_'+ym;
+    if(DB.despesas.find(d=>d.id===id)) return;
+    const dia = Math.min(28, Math.max(1, Number(f.dia)||10));
+    novas.push({id, descricao:f.descricao, categoria:f.categoria, valor:Number(f.valor)||0, mes:ym, vencimento:ym+'-'+String(dia).padStart(2,'0'), pago:false, fixaId:f.id});
+  });
+  if(!novas.length) return 0;
+  DB.despesas.push(...novas);
+  await saveRecordsBatch('despesas', novas);
+  return novas.length;
+}
+async function renderFinDespesas(el){
+  // gera as fixas sozinho a partir do mês atual (meses passados não são mexidos)
+  if(finMes >= todayISO().slice(0,7) && (DB.config.despesasFixas||[]).length){
+    const n = await gerarFixasDoMes(finMes);
+    if(n) toast(n+' despesa(s) fixa(s) lançada(s) em '+fmtMesLongo(finMes)+'.');
+  }
+  const lista = DB.despesas.filter(d=>despMes(d)===finMes && !d.excluida).sort((a,b)=>(CATEGORIAS_DESP.indexOf(a.categoria)-CATEGORIAS_DESP.indexOf(b.categoria)) || (a.vencimento||'').localeCompare(b.vencimento||''));
+  const total = lista.reduce((s,d)=>s+Number(d.valor||0),0);
+  const pagas = lista.filter(d=>d.pago).reduce((s,d)=>s+Number(d.valor||0),0);
+  const cats = [...new Set([...CATEGORIAS_DESP, ...lista.map(d=>d.categoria)])].map(c=>({c, v: lista.filter(d=>d.categoria===c).reduce((s,d)=>s+Number(d.valor||0),0)})).filter(x=>x.v);
+  const fixas = DB.config.despesasFixas||[];
+  el.innerHTML = `
+    <div class="kpis">
+      <div class="kpi red"><div class="lbl">Despesas do mês</div><div class="val">${brl(total)}</div></div>
+      <div class="kpi green"><div class="lbl">Pagas</div><div class="val">${brl(pagas)}</div></div>
+      <div class="kpi orange"><div class="lbl">Falta pagar</div><div class="val">${brl(total-pagas)}</div></div>
+    </div>
+    ${cats.length?`<div class="kpis">${cats.map(x=>`<div class="kpi"><div class="lbl">${esc(x.c)}</div><div class="val" style="font-size:18px;">${brl(x.v)}</div></div>`).join('')}</div>`:''}
+    <div class="pageHead"><h3 style="margin:0;">Lançamentos de ${fmtMesLongo(finMes)}</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        ${finMes < todayISO().slice(0,7) && fixas.length ? `<button class="btn btn-outline btn-sm" onclick="gerarFixasManual()">Lançar fixas neste mês</button>`:''}
+        <button class="btn btn-orange btn-sm" onclick="openDespesaForm()">+ Despesa avulsa</button>
+      </div>
+    </div>
+    <div class="card"><div class="tableWrap"><table><thead><tr><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Vencimento</th><th>Status</th><th>Ações</th></tr></thead><tbody>
+      ${lista.length ? lista.map(d=>`<tr>
+        <td>${esc(d.descricao)}${d.fixaId?' <span class="muted" style="font-size:11px;">· fixa</span>':''}</td><td>${esc(d.categoria)}</td><td>${brl(d.valor)}</td><td>${fmtDate(d.vencimento)}</td>
+        <td><span class="pill ${d.pago?'paga':'pendente'}">${d.pago?'Paga'+(d.dataPagamento?' '+fmtDate(d.dataPagamento):''):'Pendente'}</span></td>
+        <td style="white-space:nowrap;">${!d.pago?`<button class="iconbtn" title="Marcar paga" onclick="marcarDespesaPaga('${d.id}')">✓</button>`:`<button class="iconbtn" title="Desfazer pagamento" onclick="desfazerDespesaPaga('${d.id}')">↩</button>`}<button class="iconbtn" title="Editar valor" onclick="openDespesaForm('${d.id}')">✏️</button><button class="iconbtn" title="Excluir" onclick="deleteDespesa('${d.id}')">🗑️</button></td>
+      </tr>`).join('') : `<tr><td colspan="6" class="empty">Nenhuma despesa neste mês.</td></tr>`}
+    </tbody></table></div></div>
+
+    <div class="card">
+      <h3>Despesas fixas (todo mês)</h3>
+      <p class="muted" style="font-size:12.5px;margin-top:-8px;">Cadastre uma vez. A partir do mês atual, elas entram sozinhas como pendentes e você só marca como pagas. Mudou o valor? Edite aqui (vale para os próximos meses) e, se precisar, ajuste o lançamento do mês com ✏️.</p>
+      <div class="tableWrap"><table><thead><tr><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Dia venc.</th><th>Ações</th></tr></thead><tbody>
+        ${fixas.length ? fixas.map(f=>`<tr style="${f.ativa===false?'opacity:.5':''}">
+          <td>${esc(f.descricao)}</td><td>${esc(f.categoria)}</td><td>${brl(f.valor)}</td><td>${esc(f.dia||'')}</td>
+          <td style="white-space:nowrap;"><button class="iconbtn" title="Editar" onclick="openFixaForm('${f.id}')">✏️</button><button class="iconbtn" title="Excluir" onclick="deleteFixa('${f.id}')">🗑️</button></td>
+        </tr>`).join('') : `<tr><td colspan="5" class="empty">Nenhuma despesa fixa cadastrada.</td></tr>`}
+        ${fixas.length?`<tr><td colspan="2"><b>Total fixo por mês</b></td><td colspan="3"><b>${brl(fixas.filter(f=>f.ativa!==false).reduce((s,f)=>s+Number(f.valor||0),0))}</b></td></tr>`:''}
+      </tbody></table></div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+        <button class="btn btn-primary btn-sm" onclick="openFixaForm()">+ Despesa fixa</button>
+        ${!fixas.length?`<button class="btn btn-outline btn-sm" onclick="carregarFixasSugeridas()">Carregar a lista que montamos</button>`:''}
+      </div>
+    </div>`;
+}
+async function gerarFixasManual(){ const n = await gerarFixasDoMes(finMes); toast(n? n+' despesa(s) lançada(s).' : 'As fixas já estão lançadas neste mês.'); renderFinContent(); }
+function catOpts(sel){ return CATEGORIAS_DESP.map(c=>`<option ${c===sel?'selected':''}>${c}</option>`).join(''); }
+function openDespesaForm(id){
+  const d = id ? DB.despesas.find(x=>x.id===id) : null;
+  showModal(`
+    <button class="closeX" onclick="closeModal()">✕</button>
+    <h3>${d?'Editar despesa':'Despesa avulsa'}</h3>
+    <div class="grid c2">
+      <div class="field" style="grid-column:1/-1"><label>Descrição</label><input id="d_desc" value="${esc(d?d.descricao:'')}"></div>
+      <div class="field"><label>Categoria</label><select id="d_cat">${catOpts(d?d.categoria:'Extras')}</select></div>
+      <div class="field"><label>Valor (R$)</label><input type="number" step="0.01" id="d_valor" value="${d?d.valor:''}"></div>
+      <div class="field"><label>Vencimento</label><input type="date" id="d_venc" value="${d?(d.vencimento||''):finMes+'-'+todayISO().slice(8,10)}"></div>
+    </div>
+    <div class="modalActions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" id="modalSaveBtn" onclick="saveDespesa('${d?d.id:''}')">Salvar</button>
+    </div>`);
+}
+async function saveDespesa(id){
   const descricao = document.getElementById('d_desc').value.trim();
   if(!descricao){ toast('Informe a descrição.'); return; }
   lockSaveBtn();
-  const record = {id:uid(), descricao, categoria:document.getElementById('d_cat').value, valor:Number(document.getElementById('d_valor').value)||0, vencimento:document.getElementById('d_venc').value, pago:false};
-  DB.despesas.push(record);
+  const venc = document.getElementById('d_venc').value;
+  let record = id ? DB.despesas.find(x=>x.id===id) : null;
+  const dados = {descricao, categoria:document.getElementById('d_cat').value, valor:Number(document.getElementById('d_valor').value)||0, vencimento:venc};
+  if(record){ Object.assign(record, dados); if(!record.mes) record.mes = mesDe(venc)||finMes; }
+  else { record = {id:uid(), ...dados, mes: mesDe(venc)||finMes, pago:false}; DB.despesas.push(record); }
   const ok = await saveRecord('despesas', record);
-  if(ok){ closeModal(); toast('Despesa lançada.'); } else { unlockSaveBtn(); }
+  if(ok){ closeModal(); toast('Despesa salva.'); } else { unlockSaveBtn(); }
   renderFinContent();
 }
 async function marcarDespesaPaga(id){
-  const d = DB.despesas.find(x=>x.id===id);
-  d.pago=true;
+  const d = DB.despesas.find(x=>x.id===id); if(!d) return;
+  d.pago=true; d.dataPagamento=todayISO(); if(!d.mes) d.mes = despMes(d)||finMes;
+  await saveRecord('despesas', d); renderFinContent();
+}
+async function desfazerDespesaPaga(id){
+  const d = DB.despesas.find(x=>x.id===id); if(!d) return;
+  d.pago=false; delete d.dataPagamento;
   await saveRecord('despesas', d); renderFinContent();
 }
 function deleteDespesa(id){
-  confirmAction('Excluir esta despesa?', async ()=>{
-    DB.despesas = DB.despesas.filter(d=>d.id!==id);
-    const ok = await removeRecord('despesas', id);
-    renderFinContent();
-    toast(ok ? 'Excluída.' : 'Excluída aqui, mas não sincronizou — tente de novo.');
+  confirmAction('Excluir esta despesa deste mês?', async ()=>{
+    const d = DB.despesas.find(x=>x.id===id);
+    if(d && d.fixaId){ // fica marcada como excluída para a geração automática não recriar
+      d.excluida = true;
+      await saveRecord('despesas', d);
+    } else {
+      DB.despesas = DB.despesas.filter(x=>x.id!==id);
+      await removeRecord('despesas', id);
+    }
+    renderFinContent(); toast('Excluída.');
   });
+}
+function openFixaForm(id){
+  const f = id ? (DB.config.despesasFixas||[]).find(x=>x.id===id) : null;
+  showModal(`
+    <button class="closeX" onclick="closeModal()">✕</button>
+    <h3>${f?'Editar despesa fixa':'Nova despesa fixa'}</h3>
+    <div class="grid c2">
+      <div class="field" style="grid-column:1/-1"><label>Descrição</label><input id="fx_desc" value="${esc(f?f.descricao:'')}"></div>
+      <div class="field"><label>Categoria</label><select id="fx_cat">${catOpts(f?f.categoria:'Ferramentas')}</select></div>
+      <div class="field"><label>Valor mensal (R$)</label><input type="number" step="0.01" id="fx_valor" value="${f?f.valor:''}"></div>
+      <div class="field"><label>Dia do vencimento</label><input type="number" min="1" max="28" id="fx_dia" value="${f?(f.dia||10):10}"></div>
+      <div class="field"><label>Ativa</label><select id="fx_ativa"><option value="1" ${!f||f.ativa!==false?'selected':''}>Sim</option><option value="0" ${f&&f.ativa===false?'selected':''}>Não (pausada)</option></select></div>
+    </div>
+    <div class="modalActions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" id="modalSaveBtn" onclick="saveFixa('${f?f.id:''}')">Salvar</button>
+    </div>`);
+}
+async function saveFixa(id){
+  const descricao = document.getElementById('fx_desc').value.trim();
+  if(!descricao){ toast('Informe a descrição.'); return; }
+  lockSaveBtn();
+  const dados = {descricao, categoria:document.getElementById('fx_cat').value, valor:Number(document.getElementById('fx_valor').value)||0, dia:Number(document.getElementById('fx_dia').value)||10, ativa:document.getElementById('fx_ativa').value==='1'};
+  const fixas = [...(DB.config.despesasFixas||[])];
+  if(id){ const i = fixas.findIndex(x=>x.id===id); if(i>=0) fixas[i] = {...fixas[i], ...dados}; }
+  else fixas.push({id:uid(), ...dados});
+  DB.config = {...DB.config, despesasFixas:fixas};
+  const ok = await saveConfigDoc(DB.config);
+  if(ok){ closeModal(); toast('Despesa fixa salva.'); } else unlockSaveBtn();
+  renderFinContent();
+}
+function deleteFixa(id){
+  confirmAction('Excluir esta despesa fixa? Os lançamentos que já existem continuam.', async ()=>{
+    DB.config = {...DB.config, despesasFixas:(DB.config.despesasFixas||[]).filter(x=>x.id!==id)};
+    await saveConfigDoc(DB.config); renderFinContent();
+  });
+}
+async function carregarFixasSugeridas(){
+  const base = [
+    ['Salário Tatielle','Equipe',1700,5],['Acordo Tatielle (R$ 500/semana)','Equipe',2000,5],['VT e VR Tatielle','Equipe',600,5],
+    ['Salário Nicoly','Equipe',1700,5],['VT e VR Nicoly','Equipe',840,5],
+    ['Vanguard','Ferramentas',180,10],['Promosys','Ferramentas',180,10],['Meta WhatsApp','Ferramentas',200,10],['Meta anúncios','Ferramentas',500,10],['Locaweb','Ferramentas',9.90,10],
+    ['Internet loja','Loja',160,10],['Impressora','Loja',230,10],['Sanepar loja','Loja',350,10],
+    ['Material de escritório / extra','Extras',300,15],
+    ['Retirada Ana','Retirada',8475,5],['Diarista','Retirada',800,5]
+  ].map(([descricao,categoria,valor,dia])=>({id:uid()+Math.floor(Math.random()*1000), descricao, categoria, valor, dia, ativa:true}));
+  DB.config = {...DB.config, despesasFixas:base};
+  const ok = await saveConfigDoc(DB.config);
+  if(ok) toast('Lista carregada. Confira os valores.');
+  renderFinContent();
+}
+
+/* ---------- Caixa ---------- */
+function renderFinCaixa(el){
+  const recebidas = DB.propostas.filter(p=>p.comissaoRecebida && mesDe(p.dataRecebimento)===finMes);
+  const pagasConsultoras = DB.propostas.filter(p=>p.comissaoPaga && mesDe(p.dataPagamento)===finMes);
+  const despPagas = DB.despesas.filter(d=>d.pago && !d.excluida && mesDe(despDataPag(d))===finMes && Number(d.valor||0));
+  const movs = [
+    ...recebidas.map(p=>({data:p.dataRecebimento, desc:`Comissão recebida — ${p.clienteNome||''}`, tipo:'Entrada', valor:Number(p.comissaoTotal||0)})),
+    ...pagasConsultoras.map(p=>({data:p.dataPagamento, desc:`Comissão paga a ${vendedoraDe(p)} — ${p.clienteNome||''}`, tipo:'Consultora', valor:-Number(p.comissaoVendedora||0)})),
+    ...despPagas.map(d=>({data:despDataPag(d), desc:d.descricao, tipo:d.categoria, valor:-Number(d.valor||0)}))
+  ].sort((a,b)=>(a.data||'').localeCompare(b.data||''));
+  let saldo = 0; movs.forEach(m=>{ saldo += m.valor; m.saldo = saldo; });
+  const entradas = movs.filter(m=>m.valor>0).reduce((s,m)=>s+m.valor,0);
+  const saidas = movs.filter(m=>m.valor<0).reduce((s,m)=>s+m.valor,0);
+  const caixinhaMes = recebidas.reduce((s,p)=>s+splitComissao(p).caixinha,0);
+  const caixinhaTotal = DB.propostas.filter(p=>p.comissaoRecebida && mesDe(p.dataRecebimento)<=finMes).reduce((s,p)=>s+splitComissao(p).caixinha,0) - Number(cfgNum('caixinhaUsado',0));
+  const consultorasGuardar = DB.propostas.filter(p=>p.comissaoRecebida && !p.comissaoPaga).reduce((s,p)=>s+Number(p.comissaoVendedora||0),0);
+  const livre = saldo - caixinhaMes - consultorasGuardar;
+  el.innerHTML = `
+    <div class="kpis">
+      <div class="kpi green"><div class="lbl">Entradas do mês</div><div class="val">${brl(entradas)}</div></div>
+      <div class="kpi red"><div class="lbl">Saídas do mês</div><div class="val">${brl(-saidas)}</div></div>
+      <div class="kpi"><div class="lbl">Saldo do mês</div><div class="val" style="color:${saldo>=0?'var(--green)':'var(--red)'}">${brl(saldo)}</div></div>
+    </div>
+    <div class="card" style="background:#f3f7fd;">
+      <h3>Desse saldo, quanto é seu de verdade</h3>
+      <div class="metaLine"><span>Saldo do mês</span><b>${brl(saldo)}</b></div>
+      <div class="metaLine"><span>− Guardado para consultoras (recebido e ainda não pago)</span><b>${brl(consultorasGuardar)}</b></div>
+      <div class="metaLine"><span>− Caixinha do mês (${cfgNum('caixinhaPct',10)}%)</span><b>${brl(caixinhaMes)}</b></div>
+      <div class="metaLine" style="border-top:1px dashed var(--border);margin-top:6px;padding-top:8px;"><span><b style="color:var(--navy)">Livre para usar</b></span><b style="font-size:16px;color:${livre>=0?'var(--green)':'var(--red)'}">${brl(livre)}</b></div>
+      <div class="metaLine" style="margin-top:10px;"><span>Caixinha acumulada até ${fmtMesLongo(finMes)}</span><b style="color:var(--orange-dark)">${brl(caixinhaTotal)}</b></div>
+      <div style="margin-top:8px;"><button class="btn btn-outline btn-sm" onclick="openUsarCaixinha()">Registrar uso da caixinha</button></div>
+    </div>
+    <div class="card"><h3>Movimentações</h3><div class="tableWrap"><table><thead><tr><th>Data</th><th>Descrição</th><th>Tipo</th><th style="text-align:right;">Valor</th><th style="text-align:right;">Saldo</th></tr></thead><tbody>
+      ${movs.length ? movs.map(m=>`<tr><td>${fmtDate(m.data)}</td><td>${esc(m.desc)}</td><td>${esc(m.tipo)}</td>
+        <td style="text-align:right;font-weight:700;color:${m.valor>=0?'var(--green)':'var(--red)'}">${m.valor>=0?'+ ':'− '}${brl(Math.abs(m.valor))}</td>
+        <td style="text-align:right;">${brl(m.saldo)}</td></tr>`).join('') : `<tr><td colspan="5" class="empty">Nenhuma movimentação neste mês. Marque as comissões como recebidas e as despesas como pagas.</td></tr>`}
+    </tbody></table></div></div>`;
+}
+function openUsarCaixinha(){
+  showModal(`
+    <button class="closeX" onclick="closeModal()">✕</button>
+    <h3>Usar da caixinha</h3>
+    <p class="muted" style="margin:-6px 0 14px;font-size:13px;">Já usado até hoje: ${brl(cfgNum('caixinhaUsado',0))}. O valor informado é somado a esse total e sai da caixinha acumulada.</p>
+    <div class="field" style="max-width:220px;"><label>Valor usado (R$)</label><input type="number" step="0.01" id="cx_valor"></div>
+    <div class="modalActions">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-primary" id="modalSaveBtn" onclick="salvarUsoCaixinha()">Salvar</button>
+    </div>`);
+}
+async function salvarUsoCaixinha(){
+  const v = Number(document.getElementById('cx_valor').value)||0;
+  if(!v){ toast('Informe o valor.'); return; }
+  lockSaveBtn();
+  DB.config = {...DB.config, caixinhaUsado: cfgNum('caixinhaUsado',0)+v};
+  const ok = await saveConfigDoc(DB.config);
+  if(ok){ closeModal(); toast('Uso da caixinha registrado.'); } else unlockSaveBtn();
+  renderFinContent();
+}
+
+/* ---------- DRE ---------- */
+function renderFinDRE(el){
+  const recebidas = DB.propostas.filter(p=>p.comissaoRecebida && mesDe(p.dataRecebimento)===finMes);
+  const s = recebidas.reduce((a,p)=>{ const x=splitComissao(p); return {total:a.total+x.total, consultora:a.consultora+x.consultora, caixinha:a.caixinha+x.caixinha, imposto:a.imposto+x.imposto}; },{total:0,consultora:0,caixinha:0,imposto:0});
+  const desp = DB.despesas.filter(d=>despMes(d)===finMes && !d.excluida);
+  const porCat = [...new Set([...CATEGORIAS_DESP, ...desp.map(d=>d.categoria)])].map(c=>({c, v:desp.filter(d=>d.categoria===c).reduce((t,d)=>t+Number(d.valor||0),0)})).filter(x=>x.v);
+  const totalDesp = porCat.reduce((t,x)=>t+x.v,0);
+  const liquida = s.total - s.consultora - s.imposto;
+  const resultado = liquida - totalDesp;
+  const livre = resultado - s.caixinha;
+  const aReceber = DB.propostas.filter(p=>p.status==='Integrada' && !p.comissaoRecebida).reduce((t,p)=>t+Number(p.comissaoTotal||0),0);
+  const row = (lbl, v, opts={})=>`<tr><td style="${opts.indent?'padding-left:22px;':''}">${opts.b?`<b>${lbl}</b>`:lbl}</td><td style="text-align:right;font-weight:700;color:${opts.color||(v<0?'var(--red)':'var(--navy)')}">${v<0?'− ':''}${brl(Math.abs(v))}</td></tr>`;
+  el.innerHTML = `
+    <div class="card">
+      <h3>DRE — ${fmtMesLongo(finMes)}</h3>
+      <div class="tableWrap"><table>
+        ${row('Comissões recebidas das promotoras', s.total, {b:true, color:'var(--green)'})}
+        ${row('Comissões das consultoras', -s.consultora, {indent:true})}
+        ${row(`Imposto (${cfgNum('impostoPct',0)}%)`, -s.imposto, {indent:true})}
+        ${row('Receita líquida', liquida, {b:true})}
+        ${porCat.map(x=>row(x.c, -x.v, {indent:true})).join('') || row('Despesas', 0, {indent:true})}
+        ${row('Resultado do mês', resultado, {b:true, color: resultado>=0?'var(--green)':'var(--red)'})}
+        ${row(`Caixinha (${cfgNum('caixinhaPct',10)}%)`, -s.caixinha, {indent:true})}
+        <tr style="border-top:2px solid var(--border);"><td style="padding-top:14px;"><b style="font-size:15px;color:${livre>=0?'var(--green)':'var(--red)'}">${livre>=0?'Sobra livre':'Faltou no mês'}</b></td><td style="text-align:right;padding-top:14px;"><b style="font-size:17px;color:${livre>=0?'var(--green)':'var(--red)'}">${brl(livre)}</b></td></tr>
+      </table></div>
+      <p class="muted" style="font-size:12.5px;margin:12px 0 0;">Considera as comissões com recebimento neste mês e todas as despesas lançadas no mês (pagas ou não). Ainda a receber das promotoras: <b>${brl(aReceber)}</b>.</p>
+    </div>`;
 }
 
 /* ============================= GESTOR (config) ============================= */
@@ -1882,11 +2152,13 @@ function renderGestor(){
   document.getElementById('mainArea').innerHTML = `
     <div class="pageHead"><h2>Gestor</h2></div>
     <div class="card">
-      <h3>Configuração de Comissões</h3>
+      <h3>Configuração de Comissões e Caixa</h3>
       <p class="muted" style="font-size:12.5px;margin-top:-8px;">O % de comissão total é digitado manualmente em cada proposta (varia por contrato/banco). Esses dois percentuais abaixo definem apenas como esse valor é dividido entre a empresa e a vendedora. A soma deve ser 100%.</p>
       <div class="grid c2">
         <div class="field"><label>% Empresa (sobre a comissão total)</label><input type="number" id="g_agiliza" value="${DB.config.agilizaPct}"></div>
         <div class="field"><label>% Vendedora (sobre a comissão total)</label><input type="number" id="g_vendedora" value="${DB.config.vendedoraPct}"></div>
+        <div class="field"><label>% Caixinha (guardar de cada comissão recebida)</label><input type="number" step="0.1" id="g_caixinha" value="${cfgNum('caixinhaPct',10)}"></div>
+        <div class="field"><label>% Imposto (alíquota do Simples, informe com o contador)</label><input type="number" step="0.1" id="g_imposto" value="${cfgNum('impostoPct',0)}"></div>
       </div>
       <button class="btn btn-primary" onclick="saveConfig()">Salvar Configuração</button>
     </div>
@@ -1902,15 +2174,17 @@ function renderGestor(){
 async function saveConfig(){
   const agiliza = Number(document.getElementById('g_agiliza').value)||0;
   const vendedora = Number(document.getElementById('g_vendedora').value)||0;
+  const caixinhaPct = Number(document.getElementById('g_caixinha').value)||0;
+  const impostoPct = Number(document.getElementById('g_imposto').value)||0;
   if(agiliza+vendedora!==100){
     confirmAction('A soma dos percentuais Empresa + Vendedora não é 100%. Deseja salvar mesmo assim?', async ()=>{
-      DB.config = {...DB.config, agilizaPct:agiliza, vendedoraPct:vendedora};
+      DB.config = {...DB.config, agilizaPct:agiliza, vendedoraPct:vendedora, caixinhaPct, impostoPct};
       await saveConfigDoc(DB.config);
       toast('Configuração salva.'); renderGestor();
     });
     return;
   }
-  DB.config = {...DB.config, agilizaPct:agiliza, vendedoraPct:vendedora};
+  DB.config = {...DB.config, agilizaPct:agiliza, vendedoraPct:vendedora, caixinhaPct, impostoPct};
   await saveConfigDoc(DB.config);
   toast('Configuração salva.'); renderGestor();
 }
