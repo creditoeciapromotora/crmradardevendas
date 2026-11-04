@@ -568,8 +568,9 @@ function getMeta(ym, nome){
   const total = (port||novo) ? port+novo : Number(m.total||0);
   return total>0 ? {total, port, novo} : null;
 }
-function progressoDe(nome, ym){
-  const props = DB.propostas.filter(p=>vendedoraDe(p)===nome && p.dataVenda && p.dataVenda.slice(0,7)===ym);
+function progressoDe(nome, ym){ return progressoFiltro(p=>vendedoraDe(p)===nome, ym); }
+function progressoFiltro(filtro, ym){
+  const props = DB.propostas.filter(p=>filtro(p) && p.dataVenda && p.dataVenda.slice(0,7)===ym);
   const soma = (arr)=>arr.reduce((s,p)=>s+Number(p.valor||0),0);
   const int = props.filter(p=>p.status==='Integrada');
   const and = props.filter(p=>STATUS_ANDAMENTO.includes(p.status));
@@ -584,7 +585,7 @@ function metaBarHtml(feito, andamento, meta){
   const pAnd = Math.min(100, meta? (feito+andamento)/meta*100 : 0);
   return `<div class="metaBar"><div class="and" style="width:${pAnd}%"></div><div class="int ${pInt>=100?'ok':''}" style="width:${pInt}%"></div></div>`;
 }
-function metaBoxHtml(titulo, meta, prog, ym, team){
+function metaBoxHtml(titulo, meta, prog, ym, team, extra){
   const pct = meta.total ? prog.int/meta.total*100 : 0;
   const falta = Math.max(0, meta.total - prog.int);
   const dias = diasUteisRestantes(ym);
@@ -600,6 +601,7 @@ function metaBoxHtml(titulo, meta, prog, ym, team){
       <div class="metaLine"><span>Em andamento</span><b>${brl(prog.and)}</b></div>
       <div class="metaLine"><span>Falta</span><b>${brl(falta)}</b></div>
       <div class="metaLine"><span>Precisa por dia útil (${dias} restantes)</span><b>${falta? brl(porDia) : 'Meta batida!'}</b></div>
+      ${extra||''}
       ${(meta.port && meta.novo) ? `<div class="metaSub">
         ${sub('Portabilidade', prog.intPort, prog.andPort, meta.port)}
         ${sub('Contrato novo', prog.intNovo, prog.andNovo, meta.novo)}
@@ -615,10 +617,17 @@ function metasCardHtml(ym, fmtMes){
     return isGestora ? `<div class="card"><h3>Metas — ${fmtMes(ym)}</h3><div class="empty">Nenhuma meta cadastrada para este mês. Cadastre na aba Gestor.</div></div>` : '';
   }
   let boxes = '';
-  if(isGestora && linhas.length>1){
+  if(isGestora){
+    // Equipe = meta das consultoras somada; o realizado conta TODAS as propostas do mês (inclusive as da loja/gestora)
     const tm = {total: linhas.reduce((s,x)=>s+x.meta.total,0), port:0, novo:0};
-    const tp = linhas.reduce((a,x)=>({int:a.int+x.prog.int, and:a.and+x.prog.and}),{int:0,and:0});
-    boxes += metaBoxHtml('Equipe', tm, tp, ym, true);
+    const tp = progressoFiltro(()=>true, ym);
+    const gestoras = Object.values(USERS).filter(u=>u.role!=='consultora').map(u=>u.nome);
+    const loja = progressoFiltro(p=>gestoras.includes(vendedoraDe(p)), ym);
+    const extra = `<div class="metaSub">
+        <div class="metaLine"><span>Vendas da loja (gestora)</span><b>${brl(loja.int)} integrado · ${brl(loja.and)} em andamento</b></div>
+        ${linhas.map(x=>`<div class="metaLine"><span>${esc(x.nome)}</span><b>${brl(x.prog.int)} integrado</b></div>`).join('')}
+      </div>`;
+    boxes += metaBoxHtml('Equipe (loja toda)', tm, tp, ym, true, extra);
   }
   boxes += linhas.map(x=>metaBoxHtml(isGestora?x.nome:'Minha meta', x.meta, x.prog, ym, false)).join('');
   return `<div class="card"><h3>Metas — ${fmtMes(ym)}</h3>
@@ -1448,10 +1457,15 @@ function deleteOport(id){
 }
 
 /* ============================= RANKING ============================= */
+let rankMes = todayISO().slice(0,7);
 function renderRanking(){
   const consultoras = Object.values(USERS).filter(u=>u.role==='consultora').map(u=>u.nome);
+  const nomesMeses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  const fmtMes = ym => { const [y,m] = ym.split('-'); return `${nomesMeses[Number(m)-1]}/${y}`; };
+  const meses = [...new Set([todayISO().slice(0,7), ...DB.propostas.filter(p=>p.dataVenda).map(p=>p.dataVenda.slice(0,7))])].sort().reverse();
+  const doMes = p => !rankMes || (p.dataVenda && p.dataVenda.slice(0,7)===rankMes);
   const stats = consultoras.map(nome=>{
-    const props = DB.propostas.filter(p=>vendedoraDe(p)===nome);
+    const props = DB.propostas.filter(p=>vendedoraDe(p)===nome && doMes(p));
     const emAndamento = props.filter(p=>p.status!=='Recusada' && p.status!=='Cancelada');
     const integradas = props.filter(p=>p.status==='Integrada');
     const totalProducao = emAndamento.reduce((s,p)=>s+Number(p.valor||0),0);
@@ -1460,13 +1474,18 @@ function renderRanking(){
 
   const medalClass = ['gold','silver','bronze'];
   document.getElementById('mainArea').innerHTML = `
-    <div class="pageHead"><h2>Ranking de Vendas</h2></div>
-    <p class="muted" style="font-size:12.5px;margin-top:-10px;">Considera todas as propostas em andamento (exceto recusadas e canceladas), não só as já integradas.</p>
+    <div class="pageHead"><h2>Ranking de Vendas <span class="muted" style="font-weight:600;font-size:15px;">— ${rankMes?fmtMes(rankMes):'Todos os meses'}</span></h2>
+      <select onchange="rankMes=this.value;renderRanking()" style="width:auto;min-width:170px;">
+        ${meses.map(m=>`<option value="${m}" ${rankMes===m?'selected':''}>${fmtMes(m)}</option>`).join('')}
+        <option value="" ${!rankMes?'selected':''}>Todos os meses</option>
+      </select>
+    </div>
+    <p class="muted" style="font-size:12.5px;margin-top:-10px;">Propostas com data de venda no mês escolhido, em andamento ou integradas (exceto recusadas e canceladas).</p>
     <div class="card">
       ${stats.map((s,i)=>`
         <div class="rankRow ${medalClass[i]||''}">
           <div class="rankPos">${i+1}º</div>
-          <div class="rankInfo"><b>${esc(s.nome)}</b><div class="muted" style="font-size:12px;">${s.totalPropostas} proposta(s) no total</div></div>
+          <div class="rankInfo"><b>${esc(s.nome)}</b><div class="muted" style="font-size:12px;">${s.totalPropostas} proposta(s) no mês</div></div>
           <div class="rankStats">
             <div>Em andamento<b>${s.qtdAndamento}</b></div>
             <div>Integradas<b>${s.qtdIntegradas}</b></div>
