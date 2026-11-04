@@ -117,22 +117,22 @@ textarea{resize:vertical;min-height:70px;}
 .rankInfo b{color:var(--navy);}
 .rankStats{display:flex;gap:22px;font-size:12.5px;color:var(--muted);}
 .rankStats b{color:var(--text);font-size:14px;display:block;}
-.metaGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;}
+.metaGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;}
 .metaBox{border:1px solid var(--border);border-radius:12px;padding:16px 18px;background:var(--card);}
 .metaBox.team{background:#f3f7fd;border-color:#c9d8ef;}
 .metaHead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px;}
-.metaHead b{color:var(--navy);font-size:15px;}
-.metaPct{font-size:26px;font-weight:800;color:var(--navy);}
+.metaHead b{color:var(--navy);font-size:17px;}
+.metaPct{font-size:30px;font-weight:800;color:var(--navy);}
 .metaPct.ok{color:#1d7a3a;}
 .metaBar{position:relative;height:14px;background:#e8ecf2;border-radius:8px;overflow:hidden;margin:6px 0 10px;}
 .metaBar .and{position:absolute;left:0;top:0;bottom:0;background:#ffd7a8;}
 .metaBar .int{position:absolute;left:0;top:0;bottom:0;background:var(--navy);}
 .metaBar .int.ok{background:#1d7a3a;}
-.metaLine{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0;}
+.metaLine{display:flex;justify-content:space-between;gap:10px;font-size:14.5px;padding:4px 0;}
 .metaLine span:first-child{color:var(--muted);}
 .metaLine b{color:var(--navy);}
 .metaSub{border-top:1px dashed var(--border);margin-top:8px;padding-top:8px;}
-.metaLegend{display:flex;gap:14px;font-size:11.5px;color:var(--muted);margin-top:4px;flex-wrap:wrap;}
+.metaLegend{display:flex;gap:14px;font-size:13px;color:var(--muted);margin-top:4px;flex-wrap:wrap;}
 .metaLegend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px;}
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--navy-dark);color:#fff;padding:12px 20px;border-radius:10px;font-size:13.5px;z-index:100;box-shadow:0 8px 22px rgba(0,0,0,.3);display:none;}
 </style>
@@ -444,7 +444,6 @@ function buildNav(){
     ['clientes','Clientes'],
     ['propostas','Propostas'],
     ['oportunidades','Oportunidades'],
-    ['ranking','Ranking'],
     ['agenda','Agenda'],
     ['simulador','Simulador'],
     ['financeiro','Financeiro']
@@ -509,15 +508,29 @@ function renderDashboard(){
     const doStatus = mine.filter(p=>p.status===s);
     return {status:s, qtd: doStatus.length, valor: doStatus.reduce((sum,p)=>sum+Number(p.valor||0),0)};
   });
+  // Status organizados em 3 grupos: em andamento · integradas · perdidas
+  const grupoStatus = [
+    {titulo:'Em andamento', cor:'#f7941d', itens:['Em digitação','Ag. desbloqueio','Em análise','Ag. saldo devedor']},
+    {titulo:'Integradas', cor:'var(--green)', itens:['Integrada']},
+    {titulo:'Perdidas', cor:'var(--red)', itens:['Recusada','Cancelada']}
+  ].map(g=>{
+    const itens = g.itens.map(st=>porStatus.find(x=>x.status===st)).filter(Boolean);
+    return {...g, itens, qtd:itens.reduce((s,x)=>s+x.qtd,0), valor:itens.reduce((s,x)=>s+x.valor,0)};
+  });
+  const totalGeral = grupoStatus.reduce((s,g)=>s+g.valor,0);
+  const filtrarStatus = st => `goTab('propostas');setTimeout(()=>{document.getElementById('propStatusFilter').value='${st}';renderPropostasTable();},0)`;
   const statusCards = `
-    <div class="kpis">
-      ${porStatus.map(({status,qtd,valor})=>`
-        <div class="kpi" style="cursor:pointer;" onclick="goTab('propostas');setTimeout(()=>{document.getElementById('propStatusFilter').value='${status}';renderPropostasTable();},0)">
-          <div class="lbl">${statusPill(status)}</div>
-          <div class="val">${qtd}</div>
-          <div style="font-size:14.5px;font-weight:700;color:var(--navy);margin-top:6px;">${brl(valor)}</div>
-        </div>
-      `).join('')}
+    <div class="metaBar" style="height:12px;margin:0 0 16px;display:flex;">
+      ${grupoStatus.map(g=>`<div style="background:${g.cor};width:${totalGeral?g.valor/totalGeral*100:0}%;"></div>`).join('')}
+    </div>
+    <div class="metaGrid">
+      ${grupoStatus.map(g=>`
+        <div class="metaBox" style="border-top:4px solid ${g.cor};">
+          <div class="metaHead"><b>${g.titulo}</b><span style="font-weight:800;color:var(--navy);">${g.qtd}</span></div>
+          <div style="font-size:18px;font-weight:800;color:var(--navy);margin:-2px 0 10px;">${brl(g.valor)}</div>
+          ${g.itens.map(x=>`<div class="metaLine" style="cursor:pointer;" onclick="${filtrarStatus(x.status)}" title="Ver propostas">
+            <span>${esc(x.status)}</span><b>${x.qtd} · ${brl(x.valor)}</b></div>`).join('')}
+        </div>`).join('')}
     </div>`;
 
   const fechadas = mine.filter(p=>p.status==='Integrada');
@@ -533,12 +546,47 @@ function renderDashboard(){
     <div class="pageHead"><h2>Dashboard <span class="muted" style="font-weight:600;font-size:15px;">— ${dashMesFiltro ? fmtMes(dashMesFiltro) : 'Todos os meses'}</span></h2>${filtroSelect}</div>
     ${metasCardHtml(dashMesFiltro || todayISO().slice(0,7), fmtMes)}
     ${kpis}
+    ${rankingsHtml(mine, dashMesFiltro)}
     <div class="card"><h3>Propostas por status${dashMesFiltro?' — '+fmtMes(dashMesFiltro):''}</h3>${statusCards}</div>
     <div class="card"><h3>Propostas fechadas por origem</h3>${origemCards}</div>
     <div class="card"><h3>Propostas recentes</h3>${tbl}</div>
   `;
 }
 
+function rankingsHtml(lista, ym){
+  // Dois rankings lado a lado: consultoras e produtos (valor digitado, sem recusadas/canceladas)
+  const valida = p => p.status!=='Recusada' && p.status!=='Cancelada';
+  const doMes = p => !ym || (p.dataVenda && p.dataVenda.slice(0,7)===ym);
+  const soma = arr => arr.reduce((s,p)=>s+Number(p.valor||0),0);
+  const consultoras = Object.values(USERS).filter(u=>u.role==='consultora').map(u=>u.nome);
+  const rkCons = consultoras.map(nome=>({nome, valor: soma(DB.propostas.filter(p=>vendedoraDe(p)===nome && doMes(p) && valida(p)))}))
+    .sort((a,b)=>b.valor-a.valor);
+  const grupos = {};
+  lista.filter(valida).forEach(p=>{ const k=p.modalidade||'Sem modalidade'; grupos[k]=(grupos[k]||0)+Number(p.valor||0); });
+  const rkProd = Object.entries(grupos).map(([nome,valor])=>({nome,valor})).sort((a,b)=>b.valor-a.valor);
+  const medalha = ['#e5a50a','#9aa3ae','#c07a3a'];
+  const lista_ = (itens, comPct) => {
+    if(!itens.length || !itens.some(x=>x.valor)) return '<div class="empty">Nenhuma proposta digitada neste período.</div>';
+    const max = itens[0].valor||1, total = itens.reduce((s,x)=>s+x.valor,0)||1;
+    return itens.map((x,i)=>`
+      <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+        <div style="display:flex;align-items:center;gap:12px;">
+          <div style="width:30px;height:30px;border-radius:50%;background:${medalha[i]||'var(--navy)'};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex-shrink:0;">${i+1}º</div>
+          <b style="flex:1;color:var(--navy);font-size:16px;">${esc(x.nome)}</b>
+          <b style="font-size:17px;color:var(--navy);">${brl(x.valor)}</b>
+          ${comPct?`<span class="muted" style="width:44px;text-align:right;font-weight:700;">${Math.round(x.valor/total*100)}%</span>`:''}
+        </div>
+        <div class="metaBar" style="margin:8px 0 0 42px;height:8px;"><div class="int" style="width:${x.valor/max*100}%"></div></div>
+      </div>`).join('');
+  };
+  return `<div class="card"><h3>Rankings do mês</h3>
+    <div class="metaGrid">
+      <div class="metaBox"><div class="metaHead"><b>Consultoras</b><span class="muted" style="font-size:13px;">produção digitada</span></div>${lista_(rkCons,false)}</div>
+      <div class="metaBox"><div class="metaHead"><b>Produtos</b><span class="muted" style="font-size:13px;">produção · % do total</span></div>${lista_(rkProd,true)}</div>
+    </div>
+    <p class="muted" style="font-size:13px;margin:10px 0 0;">Valor digitado no período escolhido acima, exceto recusadas e canceladas.</p>
+  </div>`;
+}
 function statusPill(s){
   const map = {'Em digitação':'digitacao','Ag. desbloqueio':'desbloqueio','Em análise':'analise','Integrada':'integrada','Recusada':'recusada','Cancelada':'cancelada','Ag. saldo devedor':'saldo'};
   return `<span class="pill ${map[s]||''}">${esc(s)}</span>`;
@@ -586,21 +634,22 @@ function metaBarHtml(feito, andamento, meta){
   return `<div class="metaBar"><div class="and" style="width:${pAnd}%"></div><div class="int ${pInt>=100?'ok':''}" style="width:${pInt}%"></div></div>`;
 }
 function metaBoxHtml(titulo, meta, prog, ym, team, extra){
-  const pct = meta.total ? prog.int/meta.total*100 : 0;
-  const falta = Math.max(0, meta.total - prog.int);
+  const digitado = prog.int + prog.and;
+  const pct = meta.total ? digitado/meta.total*100 : 0;
+  const falta = Math.max(0, meta.total - digitado);
   const dias = diasUteisRestantes(ym);
   const porDia = dias ? falta/dias : falta;
   const sub = (lbl, feito, and, alvo)=>`
-    <div class="metaLine"><span>${lbl}</span><b>${brl(feito)} de ${brl(alvo)} · ${alvo?Math.round(feito/alvo*100):0}%</b></div>
+    <div class="metaLine"><span>${lbl}</span><b>${brl(feito+and)} de ${brl(alvo)} · ${alvo?Math.round((feito+and)/alvo*100):0}%</b></div>
     ${metaBarHtml(feito, and, alvo)}`;
   return `
     <div class="metaBox ${team?'team':''}">
       <div class="metaHead"><b>${esc(titulo)}</b><span class="metaPct ${pct>=100?'ok':''}">${Math.round(pct)}%</span></div>
       ${metaBarHtml(prog.int, prog.and, meta.total)}
-      <div class="metaLine"><span>Integrado</span><b>${brl(prog.int)} de ${brl(meta.total)}</b></div>
+      <div class="metaLine"><span>Digitado no mês</span><b>${brl(digitado)} de ${brl(meta.total)}</b></div>
+      <div class="metaLine"><span>Já integrado</span><b>${brl(prog.int)}</b></div>
       <div class="metaLine"><span>Em andamento</span><b>${brl(prog.and)}</b></div>
-      <div class="metaLine"><span>Falta</span><b>${brl(falta)}</b></div>
-      <div class="metaLine"><span>Precisa por dia útil (${dias} restantes)</span><b>${falta? brl(porDia) : 'Meta batida!'}</b></div>
+      <div class="metaLine"><span>Falta</span><b>${falta? brl(falta) : 'Meta batida!'}</b></div>
       ${extra||''}
       ${(meta.port && meta.novo) ? `<div class="metaSub">
         ${sub('Portabilidade', prog.intPort, prog.andPort, meta.port)}
@@ -624,15 +673,15 @@ function metasCardHtml(ym, fmtMes){
     const gestoras = Object.values(USERS).filter(u=>u.role!=='consultora').map(u=>u.nome);
     const loja = progressoFiltro(p=>gestoras.includes(vendedoraDe(p)), ym);
     const extra = `<div class="metaSub">
-        <div class="metaLine"><span>Vendas da loja (gestora)</span><b>${brl(loja.int)} integrado · ${brl(loja.and)} em andamento</b></div>
-        ${linhas.map(x=>`<div class="metaLine"><span>${esc(x.nome)}</span><b>${brl(x.prog.int)} integrado</b></div>`).join('')}
+        <div class="metaLine"><span>Vendas da loja (gestora)</span><b>${brl(loja.int+loja.and)}</b></div>
+        ${linhas.map(x=>`<div class="metaLine"><span>${esc(x.nome)}</span><b>${brl(x.prog.int+x.prog.and)}</b></div>`).join('')}
       </div>`;
     boxes += metaBoxHtml('Equipe (loja toda)', tm, tp, ym, true, extra);
   }
   boxes += linhas.map(x=>metaBoxHtml(isGestora?x.nome:'Minha meta', x.meta, x.prog, ym, false)).join('');
   return `<div class="card"><h3>Metas — ${fmtMes(ym)}</h3>
     <div class="metaGrid">${boxes}</div>
-    <div class="metaLegend"><span><i style="background:var(--navy)"></i>Integrado (conta na meta)</span><span><i style="background:#ffd7a8"></i>Em andamento</span></div>
+    <div class="metaLegend"><span><i style="background:var(--navy)"></i>Integrado</span><span><i style="background:#ffd7a8"></i>Em andamento</span><span>As duas contam na meta · recusadas e canceladas saem automaticamente</span></div>
   </div>`;
 }
 
@@ -1480,17 +1529,13 @@ function renderRanking(){
         <option value="" ${!rankMes?'selected':''}>Todos os meses</option>
       </select>
     </div>
-    <p class="muted" style="font-size:12.5px;margin-top:-10px;">Propostas com data de venda no mês escolhido, em andamento ou integradas (exceto recusadas e canceladas).</p>
+    <p class="muted" style="font-size:13.5px;margin-top:-10px;">Valor digitado no mês escolhido (exceto recusadas e canceladas).</p>
     <div class="card">
       ${stats.map((s,i)=>`
         <div class="rankRow ${medalClass[i]||''}">
           <div class="rankPos">${i+1}º</div>
-          <div class="rankInfo"><b>${esc(s.nome)}</b><div class="muted" style="font-size:12px;">${s.totalPropostas} proposta(s) no mês</div></div>
-          <div class="rankStats">
-            <div>Em andamento<b>${s.qtdAndamento}</b></div>
-            <div>Integradas<b>${s.qtdIntegradas}</b></div>
-            <div>Total em produção<b>${brl(s.totalProducao)}</b></div>
-          </div>
+          <div class="rankInfo"><b style="font-size:17px;">${esc(s.nome)}</b></div>
+          <div class="rankStats"><div>Produção no mês<b style="font-size:20px;">${brl(s.totalProducao)}</b></div></div>
         </div>
       `).join('') || '<div class="empty">Sem dados ainda.</div>'}
     </div>
