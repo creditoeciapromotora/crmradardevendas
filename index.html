@@ -545,14 +545,59 @@ function renderDashboard(){
   document.getElementById('mainArea').innerHTML = `
     <div class="pageHead"><h2>Dashboard <span class="muted" style="font-weight:600;font-size:15px;">— ${dashMesFiltro ? fmtMes(dashMesFiltro) : 'Todos os meses'}</span></h2>${filtroSelect}</div>
     ${metasCardHtml(dashMesFiltro || todayISO().slice(0,7), fmtMes)}
-    ${kpis}
     ${rankingsHtml(mine, dashMesFiltro)}
     <div class="card"><h3>Propostas por status${dashMesFiltro?' — '+fmtMes(dashMesFiltro):''}</h3>${statusCards}</div>
-    <div class="card"><h3>Propostas fechadas por origem</h3>${origemCards}</div>
-    <div class="card"><h3>Propostas recentes</h3>${tbl}</div>
+    ${aniversariantesHtml()}
   `;
 }
 
+/* ---------- Aniversariantes ---------- */
+// Mostra quem faz aniversário hoje e nos próximos 7 dias, com mensagem pronta para o WhatsApp.
+function proximoAniver(iso){
+  if(!iso) return null;
+  const [y,m,d] = iso.split('-').map(Number); if(!m||!d) return null;
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  let prox = new Date(hoje.getFullYear(), m-1, d);
+  if(prox < hoje) prox = new Date(hoje.getFullYear()+1, m-1, d);
+  return {dias: Math.round((prox-hoje)/86400000), idade: prox.getFullYear()-y, ano: prox.getFullYear()};
+}
+function msgAniversario(c){
+  const nome = (c.nome||'').trim().split(/\s+/)[0]||'';
+  const nomeF = nome.charAt(0).toUpperCase()+nome.slice(1).toLowerCase();
+  return `Olá, ${nomeF}! 🎉\n\nHoje é um dia especial e a equipe da *Crédito & Cia* não poderia deixar passar: *feliz aniversário!*\n\nQue o seu novo ano venha com muita saúde, paz e motivos para sorrir. Obrigado pela confiança de sempre, conte com a gente para o que precisar.\n\nUm abraço,\n${currentUser.nome} · Crédito & Cia`;
+}
+function linkWhats(tel, msg){
+  let d = soDigitos(tel); if(d.length===10||d.length===11) d='55'+d;
+  return d.length>=12 ? `https://wa.me/${d}?text=${encodeURIComponent(msg)}` : '';
+}
+function aniversariantesHtml(){
+  const lista = DB.clientes.map(c=>({c, a:proximoAniver(c.nascimento)}))
+    .filter(x=>x.a && x.a.dias<=7).sort((x,y)=>x.a.dias-y.a.dias);
+  if(!lista.length) return '';
+  const quando = d => d===0?'<b style="color:var(--orange-dark)">Hoje 🎂</b>':d===1?'Amanhã':`Em ${d} dias`;
+  return `<div class="card"><h3>Aniversariantes da semana</h3>
+    <div class="tableWrap"><table><thead><tr><th>Quando</th><th>Cliente</th><th>Faz</th><th>Telefone</th><th>Convênio</th><th></th></tr></thead><tbody>
+    ${lista.map(({c,a})=>{
+      const enviado = Number(c.parabensAno)===a.ano;
+      const link = linkWhats(c.telefone, msgAniversario(c));
+      return `<tr>
+        <td>${quando(a.dias)}</td><td><b>${esc(c.nome)}</b></td><td>${a.idade} anos</td>
+        <td>${esc(c.telefone||'-')}</td><td>${esc(c.convenio||'-')}</td>
+        <td style="white-space:nowrap;text-align:right;">
+          ${enviado?'<span class="pill paga">Parabéns enviado</span>':
+            link?`<a class="btn btn-sm btn-orange" style="text-decoration:none;" href="${link}" target="_blank" rel="noopener" onclick="marcarParabens('${c.id}',${a.ano})">Enviar parabéns no WhatsApp</a>`:
+            '<span class="muted" style="font-size:12.5px;">Sem telefone válido</span>'}
+        </td></tr>`;}).join('')}
+    </tbody></table></div>
+    <p class="muted" style="font-size:13px;margin:10px 0 0;">O botão abre o WhatsApp com a mensagem pronta; é só conferir e enviar.</p>
+  </div>`;
+}
+async function marcarParabens(id, ano){
+  const c = DB.clientes.find(x=>x.id===id); if(!c) return;
+  c.parabensAno = ano;
+  await saveRecord('clientes', c);
+  setTimeout(()=>{ if(activeTab==='dashboard') renderDashboard(); }, 300);
+}
 function rankingsHtml(lista, ym){
   // Dois rankings lado a lado: consultoras e produtos (valor digitado, sem recusadas/canceladas)
   const valida = p => p.status!=='Recusada' && p.status!=='Cancelada';
