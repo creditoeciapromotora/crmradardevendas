@@ -2453,8 +2453,9 @@ function limparPropostasAntigas(){
   if(currentUser.role!=='gestora'){ toast('Apenas a gestora.'); return; }
   const quem=document.getElementById('lp_quem').value;
   const lim=inicioMesISO();
-  const alvo=propostasDe(quem).filter(p=>p.dataVenda && p.dataVenda<lim && !comissaoPendente(p));
-  if(!alvo.length){ toast('Não há propostas anteriores a '+mesAtualLabel()+' para essa seleção.'); return; }
+  const antigas=propostasDe(quem).filter(p=>p.dataVenda && p.dataVenda<lim);
+  const alvo=antigas.filter(p=>!comissaoPendente(p));
+  if(!antigas.length){ toast('Não há propostas anteriores a '+mesAtualLabel()+' para essa seleção.'); return; }
   const coberto = _backupFeito['__todas']!==undefined || _backupFeito[quem]!==undefined;
   if(!coberto){ toast('⚠️ Baixe primeiro o backup dessa seleção (ou de "Todas") para liberar a limpeza.'); return; }
   const nome=(quem==='__todas'?'todas as consultoras':quem);
@@ -2462,7 +2463,10 @@ function limparPropostasAntigas(){
   showModal(`
     <button class="closeX" onclick="closeModal()">✕</button>
     <h3>Apagar propostas antigas</h3>
-    <p>Serão apagadas <b>${alvo.length}</b> propostas de <b>${esc(nome)}</b> com data da venda anterior a <b>${mesAtualLabel()}</b>. Esta ação <b>não pode ser desfeita</b>.</p>${protegidas?`<p class="muted" style="font-size:12.5px;">${protegidas} proposta(s) integrada(s) com comissão ainda não paga ficam mantidas.</p>`:''}
+    <p>Serão apagadas <b id="lp_total">${alvo.length}</b> propostas de <b>${esc(nome)}</b> com data da venda anterior a <b>${mesAtualLabel()}</b>. Esta ação <b>não pode ser desfeita</b>.</p>${protegidas?`<div style="background:#fff8ef;border:1px solid #f5d3a6;border-radius:10px;padding:10px 12px;margin:0 0 12px;font-size:13.5px;">
+      <b>${protegidas}</b> proposta(s) integrada(s) estão com a <b>comissão marcada como não paga</b> no Radar e por isso ficariam mantidas.
+      <label style="display:flex;gap:8px;align-items:center;margin-top:8px;font-weight:700;cursor:pointer;"><input type="checkbox" id="lp_pend" style="width:auto;" onchange="document.getElementById('lp_total').textContent=${alvo.length}+(this.checked?${protegidas}:0)"> Apagar também essas ${protegidas} (as comissões já foram acertadas por fora)</label>
+    </div>`:''}
     <p class="muted" style="font-size:12.5px;">Confirme que o arquivo de backup foi baixado e abre corretamente. Para continuar, digite <b>APAGAR</b>:</p>
     <div class="field"><input id="lp_conf" placeholder="APAGAR"></div>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
@@ -2474,7 +2478,9 @@ async function executarLimpeza(quem){
   if((document.getElementById('lp_conf').value||'').trim().toUpperCase()!=='APAGAR'){ toast('Digite APAGAR para confirmar.'); return; }
   const btn=document.getElementById('lp_btn'); btn.disabled=true; btn.textContent='Apagando...';
   const lim=inicioMesISO();
-  const alvo=propostasDe(quem).filter(p=>p.dataVenda && p.dataVenda<lim && !comissaoPendente(p));
+  const incluirPend = !!(document.getElementById('lp_pend') && document.getElementById('lp_pend').checked);
+  const alvo=propostasDe(quem).filter(p=>p.dataVenda && p.dataVenda<lim && (incluirPend || !comissaoPendente(p)));
+  if(!alvo.length){ closeModal(); toast('Nenhuma proposta para apagar com essa seleção.'); return; }
   let ok=0, falhas=0; const apagados=new Set();
   for(const p of alvo){
     const r=await removeRecord('propostas', p.id);
