@@ -150,6 +150,7 @@ textarea{resize:vertical;min-height:70px;}
         <option value="ana">Ana (Gestora)</option>
         <option value="nicoly">Nicoly (Consultora)</option>
         <option value="tatielle">Tatielle (Consultora)</option>
+        <option value="atendimentoia">Atendimento IA</option>
       </select>
     </div>
     <div class="field">
@@ -185,8 +186,13 @@ textarea{resize:vertical;min-height:70px;}
 const USERS = {
   ana:      {nome:'Ana Lucia', role:'gestora',    senha:'ana123'},
   nicoly:   {nome:'Nicoly',    role:'consultora', senha:'nicoly123'},
-  tatielle: {nome:'Tatielle',  role:'consultora', senha:'tatielle123'}
+  tatielle: {nome:'Tatielle',  role:'consultora', senha:'tatielle123'},
+  // Atendimento por IA: lança as vendas da IA; não recebe comissão (100% fica com a loja), mas conta nas vendas e na meta da equipe
+  atendimentoia: {nome:'Atendimento IA', role:'consultora', semComissao:true, senha:'iaQS7BYQ'}
 };
+// % da comissão que vai para a vendedora (0 para quem não recebe comissão, como o Atendimento IA)
+function pctVendedoraDe(nome){ const u = Object.values(USERS).find(x=>x.nome===nome); return (u && u.semComissao) ? 0 : DB.config.vendedoraPct; }
+function pctEmpresaDe(nome){ return 100 - pctVendedoraDe(nome); }
 const CONVENIOS = ['INSS','GOV','SIAPE','PREFEITURA','EXÉRCITO','CLT','FGTS'];
 // INSS: nº do benefício + espécie · Servidores (GOV, PREFEITURA, SIAPE, EXÉRCITO): matrícula + situação · CLT e FGTS: nada
 const CONV_SERVIDOR = ['GOV','PREFEITURA','SIAPE','EXÉRCITO'];
@@ -714,12 +720,15 @@ function metasCardHtml(ym, fmtMes){
   if(isGestora){
     // Equipe = meta das consultoras somada; o realizado conta TODAS as propostas do mês (inclusive as da loja/gestora)
     const tm = {total: linhas.reduce((s,x)=>s+x.meta.total,0), port:0, novo:0};
-    const tp = progressoFiltro(()=>true, ym);
+    // A meta da equipe não conta as vendas de quem não recebe comissão (Atendimento IA): elas aparecem só nas vendas/rankings
+    const foraDaMeta = Object.values(USERS).filter(u=>u.semComissao).map(u=>u.nome);
+    const tp = progressoFiltro(p=>!foraDaMeta.includes(vendedoraDe(p)), ym);
     const gestoras = Object.values(USERS).filter(u=>u.role!=='consultora').map(u=>u.nome);
     const loja = progressoFiltro(p=>gestoras.includes(vendedoraDe(p)), ym);
     const extra = `<div class="metaSub">
         <div class="metaLine"><span>Vendas da loja (gestora)</span><b>${brl(loja.int+loja.and)}</b></div>
         ${linhas.map(x=>`<div class="metaLine"><span>${esc(x.nome)}</span><b>${brl(x.prog.int+x.prog.and)}</b></div>`).join('')}
+        ${Object.values(USERS).filter(u=>u.semComissao && !linhas.find(x=>x.nome===u.nome)).map(u=>{const pr=progressoDe(u.nome, ym); return `<div class="metaLine"><span>${esc(u.nome)} <i style="font-style:normal;font-size:12px;">(fora da meta)</i></span><b>${brl(pr.int+pr.and)}</b></div>`;}).join('')}
       </div>`;
     boxes += metaBoxHtml('Equipe (loja toda)', tm, tp, ym, true, extra);
   }
@@ -954,7 +963,7 @@ function openPropostaForm(id, prefillCpf){
       <div id="doc_progresso" class="muted" style="font-size:12.5px;margin-top:6px;"></div>
       <div id="doc_lista" style="margin-top:8px;"></div>
     </div>
-    ${isGestora ? `<div class="field"><label>Vendedora (quem recebe a comissão)</label><select id="pf_vendedora">${vendedorasOpts.map(v=>`<option ${vendedoraAtual===v?'selected':''}>${v}</option>`).join('')}</select></div>` : ''}
+    ${isGestora ? `<div class="field"><label>Vendedora (quem recebe a comissão)</label><select id="pf_vendedora" onchange="calcComissaoPreview()">${vendedorasOpts.map(v=>`<option ${vendedoraAtual===v?'selected':''}>${v}</option>`).join('')}</select></div>` : ''}
     <div class="grid c3">
       <div class="field"><label>Data da venda</label><input type="date" id="pf_data" value="${p?p.dataVenda:todayISO()}"></div>
       <div class="field"><label>Banco</label><input id="pf_banco" value="${p?esc(p.banco):''}" placeholder="Digite o nome do banco"></div>
@@ -989,8 +998,8 @@ function openPropostaForm(id, prefillCpf){
     <div class="card" style="background:#f8fafc;margin-top:4px;">
       <div class="grid c3" style="gap:8px;">
         <div><div class="muted" style="font-size:11px;">COMISSÃO TOTAL</div><b id="pf_comTotal">R$ 0,00</b></div>
-        <div><div class="muted" style="font-size:11px;">EMPRESA (${DB.config.agilizaPct}%)</div><b id="pf_comAgiliza" style="color:var(--navy)">R$ 0,00</b></div>
-        <div><div class="muted" style="font-size:11px;">VENDEDORA (${DB.config.vendedoraPct}%)</div><b id="pf_comVend" style="color:var(--orange-dark)">R$ 0,00</b></div>
+        <div><div class="muted" style="font-size:11px;">EMPRESA (<span id="pf_pctEmp">${DB.config.agilizaPct}</span>%)</div><b id="pf_comAgiliza" style="color:var(--navy)">R$ 0,00</b></div>
+        <div><div class="muted" style="font-size:11px;">VENDEDORA (<span id="pf_pctVend">${DB.config.vendedoraPct}</span>%)</div><b id="pf_comVend" style="color:var(--orange-dark)">R$ 0,00</b></div>
       </div>
     </div>
     <div class="modalActions">
@@ -1068,11 +1077,15 @@ function calcComissaoTotalAtual(){
 }
 function calcComissaoPreview(){
   const total = calcComissaoTotalAtual();
-  const agiliza = total * DB.config.agilizaPct/100;
-  const vend = total * DB.config.vendedoraPct/100;
+  const selV = document.getElementById('pf_vendedora');
+  const quemVende = selV ? selV.value : currentUser.nome;
+  const vend = total * pctVendedoraDe(quemVende)/100;
+  const agiliza = total - vend;
   document.getElementById('pf_comTotal').textContent = brl(total);
   document.getElementById('pf_comAgiliza').textContent = brl(agiliza);
   document.getElementById('pf_comVend').textContent = brl(vend);
+  const pv=document.getElementById('pf_pctVend'), pe=document.getElementById('pf_pctEmp');
+  if(pv) pv.textContent = pctVendedoraDe(quemVende); if(pe) pe.textContent = pctEmpresaDe(quemVende);
 }
 async function saveProposta(id){
   const cliente = findClienteAcessivel(document.getElementById('pf_cpf').value);
@@ -1099,10 +1112,10 @@ async function saveProposta(id){
   if(!comissaoTotal){ toast('Informe o % de comissão (ou os % de portabilidade/refin) OU o valor total em R$.'); return; }
   lockSaveBtn();
   const comissaoPctFinal = comTotalManual>0 && valor>0 ? (comissaoTotal/valor*100) : (isPR && remuneracao==='liquido' ? '' : pct);
-  const comissaoAgiliza = comissaoTotal*DB.config.agilizaPct/100;
-  const comissaoVendedora = comissaoTotal*DB.config.vendedoraPct/100;
   const isGestora = currentUser.role==='gestora';
   const vendedora = isGestora ? document.getElementById('pf_vendedora').value : currentUser.nome;
+  const comissaoVendedora = comissaoTotal*pctVendedoraDe(vendedora)/100;
+  const comissaoAgiliza = comissaoTotal - comissaoVendedora;
   const data = {
     dataVenda: document.getElementById('pf_data').value,
     clienteCpf: cpf, clienteNome: cliente.nome, clienteTelefone: cliente.telefone, convenio: cliente.convenio, clienteOrigem: cliente.origem||'',
