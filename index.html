@@ -216,10 +216,10 @@ function infoConvenioTxt(c){
   if(CONV_SERVIDOR.includes(c.convenio)) return [c.beneficio?'Matrícula '+c.beneficio:'', c.situacao||''].filter(Boolean).join(' · ');
   return '';
 }
-const ORIGENS = ['URA','Loja','Já é cliente','Site','Facebook','Disparo','Indicação','Madepinus'];
+const ORIGENS = ['URA','Loja','Já é cliente','Site','Facebook','Disparo','Indicação','Madepinus','Telein Clara','Telein Nicoly','Telein Taty','Face/insta','WhatsApp Business'];
 const MODALIDADES = ['Margem Nova','Portabilidade','Refinanciamento','Portabilidade + Refin','Cartão Benefício','Cartão Consignado','Crédito Consignado CLT','Complementar','Saque FGTS'];
 const UFS = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
-const STATUS_PROPOSTA = ['Em digitação','Ag. desbloqueio','Em análise','Integrada','Recusada','Cancelada','Ag. saldo devedor'];
+const STATUS_PROPOSTA = ['Em digitação','Ag. desbloqueio','Em análise','Integrada','Recusada','Cancelada','Ag. saldo devedor','Aumento INSS'];
 const STATUS_SIM = ['Em negociação','Enviado ao cliente','Fechado','Sem retorno','Perdido'];
 const STATUS_OPORT = ['Ag. Atendimento','Atendido','Sem interesse','Sem valores liberados','Reagendar contato','Convertido'];
 const BANCOS = ['FACTA','C6 CONSIGNADO','BMG','PAN','SAFRA','OLE','DAYCOVAL','MASTER','CREFISA','ICRED'];
@@ -639,7 +639,7 @@ function rankingsHtml(lista, ym){
   </div>`;
 }
 function statusPill(s){
-  const map = {'Em digitação':'digitacao','Ag. desbloqueio':'desbloqueio','Em análise':'analise','Integrada':'integrada','Recusada':'recusada','Cancelada':'cancelada','Ag. saldo devedor':'saldo'};
+  const map = {'Em digitação':'digitacao','Ag. desbloqueio':'desbloqueio','Em análise':'analise','Integrada':'integrada','Recusada':'recusada','Cancelada':'cancelada','Ag. saldo devedor':'saldo','Aumento INSS':'saldo'};
   return `<span class="pill ${map[s]||''}">${esc(s)}</span>`;
 }
 
